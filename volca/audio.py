@@ -321,40 +321,286 @@ def dc_offset_remove(sample):
 
 
 # --------------------------------------------------------------------------
+# Filtres biquad (formules RBJ)
+# --------------------------------------------------------------------------
+def _biquad_apply(data, b0, b1, b2, a1, a2):
+    """Applique un biquad en forme directe I."""
+    x1 = x2 = y1 = y2 = 0.0
+    out = []
+    for x0 in data:
+        y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+        x2, x1 = x1, x0
+        y2, y1 = y1, y0
+        out.append(y0)
+    return out
+
+
+def _hp_coeffs(freq, rate, q=0.707):
+    w0 = 2.0 * math.pi * freq / rate
+    cw = math.cos(w0)
+    alpha = math.sin(w0) / (2.0 * q)
+    a0 = 1.0 + alpha
+    return ((1.0 + cw) / 2.0 / a0,
+            -(1.0 + cw) / a0,
+            (1.0 + cw) / 2.0 / a0,
+            (-2.0 * cw) / a0,
+            (1.0 - alpha) / a0)
+
+
+def _shelf_coeffs(freq, rate, gain_db, q=0.707):
+    """Plateau aigu, utilise pour la ponderation K."""
+    a = 10.0 ** (gain_db / 40.0)
+    w0 = 2.0 * math.pi * freq / rate
+    cw, sw = math.cos(w0), math.sin(w0)
+    alpha = sw / (2.0 * q)
+    tsa = 2.0 * math.sqrt(a) * alpha
+    a0 = (a + 1.0) - (a - 1.0) * cw + tsa
+    return (a * ((a + 1.0) + (a - 1.0) * cw + tsa) / a0,
+            -2.0 * a * ((a - 1.0) + (a + 1.0) * cw) / a0,
+            a * ((a + 1.0) + (a - 1.0) * cw - tsa) / a0,
+            2.0 * ((a - 1.0) - (a + 1.0) * cw) / a0,
+            ((a + 1.0) - (a - 1.0) * cw - tsa) / a0)
+
+
+def highpass(sample, freq=45.0, order=2):
+    """Coupe le grave. Libere enormement de marge avant ecretage :
+    l'energie sous 40 Hz est inaudible sur la plupart des systemes mais
+    mange la dynamique."""
+    if freq <= 0 or freq >= sample.rate / 2.0:
+        return sample
+    c = _hp_coeffs(freq, sample.rate)
+    d = sample.data
+    for _ in range(max(1, order // 2)):
+        d = _biquad_apply(d, *c)
+    sample.data = d
+    return sample
+
+
+# --------------------------------------------------------------------------
+# Saturation
+# --------------------------------------------------------------------------
+def saturate(sample, drive=1.5, mix=0.4):
+    """Saturation douce (tanh). Ajoute des harmoniques au lieu d'ecreter :
+    le son parait plus fort sans monter le niveau."""
+    if drive <= 0 or mix <= 0:
+        return sample
+    norm = math.tanh(drive)
+    out = []
+    for x in sample.data:
+        wet = math.tanh(x * drive) / norm
+        out.append(x * (1.0 - mix) + wet * mix)
+    sample.data = out
+    return sample
+
+
+# --------------------------------------------------------------------------
+# Transient shaper
+# --------------------------------------------------------------------------
+def transient(sample, attack_db=3.0, sustain_db=0.0,
+              fast_ms=1.0, slow_ms=40.0):
+    """Accentue ou mate l'attaque, independamment du volume.
+
+    Plus utile qu'un compresseur sur les percussions : deux suiveurs
+    d'enveloppe, un rapide un lent. Leur ecart revele les transitoires.
+    """
+    if attack_db == 0 and sustain_db == 0:
+        return sample
+    rate = sample.rate
+    af = math.exp(-1.0 / max(rate * fast_ms / 1000.0, 1.0))
+    as_ = math.exp(-1.0 / max(rate * slow_ms / 1000.0, 1.0))
+    ef = es = 0.0
+    out = []
+    for x in sample.data:
+        a = abs(x)
+        ef = af * ef + (1.0 - af) * a if a <= ef else a
+        es = as_ * es + (1.0 - as_) * a
+        diff = lin_to_db(ef) - lin_to_db(es)
+        if diff > 0:
+            g = attack_db * min(diff / 6.0, 1.0)
+        else:
+            g = sustain_db * min(-diff / 6.0, 1.0)
+        out.append(x * db_to_lin(g))
+    sample.data = out
+    return sample
+
+
+# --------------------------------------------------------------------------
+# Niveau percu (ponderation K, approximation de la norme BS.1770)
+# --------------------------------------------------------------------------
+def loudness_lufs(sample):
+    """Niveau percu approximatif, en LUFS.
+
+    Le RMS brut surestime les sons graves : l'oreille y est moins sensible.
+    La ponderation K corrige ca. Approximation : filtres RBJ au lieu des
+    coefficients exacts de la norme, mais l'ecart reste sous 0,5 dB.
+    """
+    if not sample.data:
+        return -200.0
+    d = _biquad_apply(sample.data, *_shelf_coeffs(1500.0, sample.rate, 4.0))
+    d = _biquad_apply(d, *_hp_coeffs(38.0, sample.rate, 0.5))
+    s = 0.0
+    for v in d:
+        s += v * v
+    return -0.691 + 10.0 * math.log10(max(s / len(d), EPS))
+
+
+def target_lufs(sample, target=-14.0, max_gain_db=30.0):
+    """Amene le niveau percu a la cible. Plus fiable que le RMS pour
+    egaliser un kit entier."""
+    cur = loudness_lufs(sample)
+    if cur <= -190:
+        return sample
+    g = target - cur
+    return apply_gain(sample, min(g, max_gain_db))
+
+
+# --------------------------------------------------------------------------
+# Decoupe fine
+# --------------------------------------------------------------------------
+def snap_zero(sample, index, fenetre_ms=5.0):
+    """Deplace un point de decoupe vers le passage par zero le plus proche.
+    C'est ce qui supprime les clics."""
+    d = sample.data
+    if not d:
+        return 0
+    index = max(0, min(index, len(d) - 1))
+    w = int(sample.rate * fenetre_ms / 1000.0)
+    meilleur, score = index, abs(d[index])
+    for i in range(max(0, index - w), min(len(d), index + w)):
+        if abs(d[i]) < score:
+            meilleur, score = i, abs(d[i])
+    return meilleur
+
+
+def decouper(sample, debut_ms=None, fin_ms=None, zero=True):
+    """Decoupe manuelle, calee sur les passages par zero."""
+    d = sample.data
+    n = len(d)
+    i0 = 0 if debut_ms is None else int(sample.rate * debut_ms / 1000.0)
+    i1 = n if fin_ms is None else int(sample.rate * fin_ms / 1000.0)
+    i0 = max(0, min(i0, n - 1))
+    i1 = max(i0 + 1, min(i1, n))
+    if zero:
+        i0 = snap_zero(sample, i0)
+        i1 = snap_zero(sample, i1 - 1) + 1
+    sample.data = d[i0:i1]
+    return sample
+
+
+# --------------------------------------------------------------------------
+# Memoire : la volca n'a que 65 s au total
+# --------------------------------------------------------------------------
+TAUX_MEMOIRE = [44100, 32000, 22050, 16000, 11025]
+
+
+def changer_taux(sample, nouveau_rate):
+    """Reduit le taux d'echantillonnage. Le Syro accepte n'importe quel Fs :
+    une nappe sombre a 22 kHz ne s'entend pas et coute moitie moins cher
+    en memoire."""
+    if nouveau_rate == sample.rate:
+        return sample
+    sample.data = resample_linear(sample.data, sample.rate, nouveau_rate)
+    sample.rate = nouveau_rate
+    return sample
+
+
+def cout_memoire_s(sample):
+    """Cout en secondes de memoire volca (referme sur 44,1 kHz)."""
+    return len(sample.data) / float(TARGET_RATE)
+
+
+def taux_conseille(sample, seuil_hf_db=-28.0):
+    """Propose un taux reduit si le sample n'a pas de contenu aigu.
+
+    Mesure grossiere : energie au-dessus de 5 kHz obtenue en soustrayant
+    une version filtree passe-bas.
+    """
+    if len(sample.data) < 64:
+        return sample.rate
+    total = sample.rms()
+    if total <= EPS:
+        return sample.rate
+    # passe-bas simple a un pole vers 5 kHz
+    a = math.exp(-2.0 * math.pi * 5000.0 / sample.rate)
+    y = 0.0
+    hf = 0.0
+    for x in sample.data:
+        y = a * y + (1.0 - a) * x
+        hf += (x - y) ** 2
+    hf = math.sqrt(hf / len(sample.data))
+    ratio_db = lin_to_db(hf) - lin_to_db(total)
+    if ratio_db < seuil_hf_db - 12:
+        return 11025
+    if ratio_db < seuil_hf_db - 6:
+        return 16000
+    if ratio_db < seuil_hf_db:
+        return 22050
+    return sample.rate
+
+
+# --------------------------------------------------------------------------
 # Presets
 # --------------------------------------------------------------------------
 PRESETS = {
     "doux": {
-        "trim": False, "dc": True, "compress": None,
-        "rms": None, "ceiling": -1.0, "fade_in": 1.0, "fade_out": 3.0,
+        "hp": 25.0, "trim": False, "dc": True, "transient": None,
+        "compress": None, "rms": None, "lufs": None, "sat": None,
+        "ceiling": -1.0, "fade_in": 1.0, "fade_out": 3.0,
         "desc": "Normalisation crete seule. Garde toute la dynamique.",
     },
     "punch": {
-        "trim": True, "dc": True,
+        "hp": 45.0, "trim": True, "dc": True,
+        "transient": {"attack_db": 2.0, "sustain_db": -1.0},
         "compress": {"threshold_db": -18.0, "ratio": 3.0,
                      "attack_ms": 8.0, "release_ms": 90.0},
-        "rms": -13.0, "ceiling": -0.3, "fade_in": 1.0, "fade_out": 4.0,
-        "desc": "Compression douce + niveau moyen -13 dB. Bon defaut.",
+        "rms": -13.0, "lufs": None,
+        "sat": {"drive": 1.3, "mix": 0.25},
+        "ceiling": -0.3, "fade_in": 1.0, "fade_out": 4.0,
+        "desc": "Compression douce + attaque + niveau -13 dB. Bon defaut.",
     },
     "max": {
-        "trim": True, "dc": True,
+        "hp": 55.0, "trim": True, "dc": True,
+        "transient": {"attack_db": 3.0, "sustain_db": -2.0},
         "compress": {"threshold_db": -24.0, "ratio": 6.0,
                      "attack_ms": 2.0, "release_ms": 60.0},
-        "rms": -9.0, "ceiling": -0.2, "fade_in": 0.5, "fade_out": 3.0,
-        "desc": "Le plus fort possible. Pour kicks, claps, one-shots.",
+        "rms": -9.0, "lufs": None,
+        "sat": {"drive": 2.2, "mix": 0.45},
+        "ceiling": -0.2, "fade_in": 0.5, "fade_out": 3.0,
+        "desc": "Le plus fort possible. Kicks, claps, one-shots.",
     },
     "loop": {
-        "trim": False, "dc": True,
+        "hp": 35.0, "trim": False, "dc": True, "transient": None,
         "compress": {"threshold_db": -20.0, "ratio": 2.5,
                      "attack_ms": 15.0, "release_ms": 150.0},
-        "rms": -14.0, "ceiling": -0.5, "fade_in": 0.5, "fade_out": 0.5,
-        "desc": "Boucles : fondus minuscules pour ne pas casser le raccord.",
+        "rms": None, "lufs": -14.0,
+        "sat": {"drive": 1.2, "mix": 0.2},
+        "ceiling": -0.5, "fade_in": 0.5, "fade_out": 0.5,
+        "desc": "Boucles : niveau percu -14 LUFS, fondus minuscules.",
+    },
+    "sub": {
+        "hp": 20.0, "trim": True, "dc": True,
+        "transient": {"attack_db": 1.5, "sustain_db": 0.0},
+        "compress": {"threshold_db": -20.0, "ratio": 4.0,
+                     "attack_ms": 12.0, "release_ms": 120.0},
+        "rms": -11.0, "lufs": None, "sat": None,
+        "ceiling": -0.5, "fade_in": 2.0, "fade_out": 6.0,
+        "desc": "Basses et subs : garde le grave, pas de saturation.",
+    },
+    "voix": {
+        "hp": 90.0, "trim": True, "dc": True,
+        "transient": {"attack_db": 1.0, "sustain_db": 1.0},
+        "compress": {"threshold_db": -22.0, "ratio": 4.0,
+                     "attack_ms": 10.0, "release_ms": 120.0},
+        "rms": None, "lufs": -13.0,
+        "sat": {"drive": 1.2, "mix": 0.2},
+        "ceiling": -0.3, "fade_in": 2.0, "fade_out": 8.0,
+        "desc": "Voix et field recordings : coupe le souffle grave.",
     },
 }
 
 
 def process(sample, preset="punch", extra_gain_db=0.0, overrides=None):
-    """Applique la chaine complete et renvoie (sample, rapport)."""
+    """Chaine complete. Renvoie (sample, rapport)."""
     if preset not in PRESETS:
         raise ValueError("Preset inconnu : %s" % preset)
     cfg = dict(PRESETS[preset])
@@ -362,27 +608,44 @@ def process(sample, preset="punch", extra_gain_db=0.0, overrides=None):
         cfg.update(overrides)
 
     before = sample.info()
+    before["lufs"] = round(loudness_lufs(sample), 2)
 
     if cfg.get("dc"):
         dc_offset_remove(sample)
+    if cfg.get("hp"):
+        highpass(sample, cfg["hp"])
     if cfg.get("trim"):
         trim_silence(sample)
+    if cfg.get("transient"):
+        transient(sample, **cfg["transient"])
     if cfg.get("compress"):
         compress(sample, **cfg["compress"])
-    if cfg.get("rms") is not None:
+
+    # la saturation passe avant la mise a niveau : sinon elle deplace le
+    # niveau qu'on vient tout juste de caler
+    if cfg.get("sat"):
+        normalize_peak(sample, -6.0)   # amene le signal dans la zone utile
+        saturate(sample, **cfg["sat"])
+
+    if cfg.get("lufs") is not None:
+        target_lufs(sample, cfg["lufs"])
+    elif cfg.get("rms") is not None:
         target_rms(sample, cfg["rms"])
     else:
         normalize_peak(sample, cfg["ceiling"])
+
     if extra_gain_db:
         apply_gain(sample, extra_gain_db)
+
     fade(sample, cfg.get("fade_in", 1.0), cfg.get("fade_out", 3.0))
     limit(sample, cfg["ceiling"])
 
     after = sample.info()
-    rapport = {
+    after["lufs"] = round(loudness_lufs(sample), 2)
+    return sample, {
         "preset": preset,
         "avant": before,
         "apres": after,
         "gain_db": round(after["rms_db"] - before["rms_db"], 2),
+        "gain_lufs": round(after["lufs"] - before["lufs"], 2),
     }
-    return sample, rapport

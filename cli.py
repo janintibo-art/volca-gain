@@ -19,7 +19,7 @@ import argparse
 import os
 import sys
 
-from volca import __version__, audio, batch, project, syro
+from volca import __version__, audio, batch, project, syro, tips
 
 
 # ------------------------------------------------------------------ helpers
@@ -64,11 +64,16 @@ def cmd_info(a):
         return 1
     for p in cibles:
         try:
-            i = audio.read_wav(p).info()
+            s = audio.read_wav(p)
+            i = s.info()
+            lufs = audio.loudness_lufs(s)
             drapeau = "  <- faible" if i["rms_db"] < -20 else ""
-            print("%-30s %7.0f ms  crete %6.1f dB  RMS %6.1f dB%s" % (
-                os.path.basename(p)[:30], i["duree_ms"],
-                i["peak_db"], i["rms_db"], drapeau))
+            taux = audio.taux_conseille(s)
+            if taux < s.rate:
+                drapeau += "  (%d Hz suffirait)" % taux
+            print("%-24s %6.0f ms  crete %6.1f  RMS %6.1f  LUFS %6.1f%s" % (
+                os.path.basename(p)[:24], i["duree_ms"],
+                i["peak_db"], i["rms_db"], lufs, drapeau))
         except Exception as e:  # noqa: BLE001
             print("%-30s ERREUR : %s" % (os.path.basename(p)[:30], e))
     return 0
@@ -219,6 +224,45 @@ def cmd_effacer(a):
     return 0
 
 
+def cmd_tuto(a):
+    if a.section is None:
+        for i, t in enumerate(tips.titres()):
+            print("%d. %s" % (i + 1, t))
+        print()
+        print("python cli.py tuto -s N   pour une section")
+        print("python cli.py tuto --tout pour tout afficher")
+        return 0
+    print(tips.texte(a.section - 1))
+    return 0
+
+
+def cmd_memoire(a):
+    p = project.Projet.charger(a.projet)
+    print(p.resume())
+    print()
+    print("--- OPTIMISATION POSSIBLE ---")
+    gagne = 0.0
+    for slot in p.occupes():
+        try:
+            s = audio.read_wav(slot.chemin)
+        except Exception:  # noqa: BLE001
+            continue
+        taux = audio.taux_conseille(s)
+        cout = slot.duree_ms / 1000.0
+        if taux < s.rate:
+            eco = cout * (1.0 - taux / float(s.rate))
+            gagne += eco
+            print("  %02d %-20s %d Hz suffirait  -> %.2f s gagnees" % (
+                slot.index, slot.nom[:20], taux, eco))
+    if gagne:
+        print()
+        print("Total recuperable : %.1f s (%.0f %% de la memoire)" % (
+            gagne, 100.0 * gagne / p.memoire_totale_s()))
+    else:
+        print("  rien a gagner, tous les samples ont besoin de leur aigu")
+    return 0
+
+
 def cmd_syro(_a):
     if syro.disponible():
         print("Envoi direct : DISPONIBLE (%s)" % syro.version())
@@ -294,6 +338,15 @@ def build_parser():
     p.add_argument("--jouer", action="store_true")
     p.add_argument("--oui", action="store_true", help="sans confirmation")
     p.set_defaults(func=cmd_effacer)
+
+    p = sub.add_parser("tuto", help="conseils de reglages et infos")
+    p.add_argument("-s", "--section", type=int)
+    p.add_argument("--tout", action="store_const", const=None, dest="section")
+    p.set_defaults(func=cmd_tuto)
+
+    p = sub.add_parser("memoire", help="analyser la memoire d'un projet")
+    p.add_argument("projet")
+    p.set_defaults(func=cmd_memoire)
 
     p = sub.add_parser("syro", help="tester l'envoi direct")
     p.set_defaults(func=cmd_syro)

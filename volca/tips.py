@@ -1,0 +1,189 @@
+"""
+Contenu de l'onglet TUTO.
+
+Structure de donnees pure : utilisable par le CLI (python cli.py tuto) et
+par l'interface graphique. Aucune dependance.
+"""
+
+SECTIONS = [
+    {
+        "titre": "Pourquoi cette application",
+        "lignes": [
+            "Le librarian Korg a un parametre LEVEL qui plafonne a 100 %.",
+            "Il ne peut que BAISSER le volume, jamais le monter.",
+            "Un sample enregistre trop faible reste trop faible, et rien",
+            "dans l'application officielle ne permet de retravailler le son.",
+            "",
+            "Volca Gain fait le traitement AVANT le transfert, puis envoie",
+            "directement par SYNC IN. Le librarian devient inutile.",
+        ],
+    },
+    {
+        "titre": "Reperer un sample trop faible",
+        "lignes": [
+            "Onglet TRAITEMENT > Analyser. Regarde la colonne RMS :",
+            "",
+            "  au-dessus de -12 dB : deja fort, preset doux suffit",
+            "  entre -12 et -20 dB : normal, preset punch",
+            "  en dessous de -20 dB : trop faible, preset max",
+            "",
+            "La CRETE ne dit rien du volume percu. Un sample peut avoir",
+            "une crete a 0 dB et sonner tres faible : c'est le RMS qui",
+            "compte, c'est-a-dire l'energie moyenne.",
+            "",
+            "Le LUFS est encore plus fiable : il tient compte du fait que",
+            "l'oreille est moins sensible aux graves.",
+        ],
+    },
+    {
+        "titre": "Quel preset choisir",
+        "lignes": [
+            "doux  - normalisation crete seule, garde toute la dynamique.",
+            "        Pour les samples deja bien enregistres.",
+            "",
+            "punch - le bon defaut. Compression douce, attaque accentuee,",
+            "        niveau -13 dB. Marche sur presque tout.",
+            "",
+            "max   - le plus fort possible. Kicks, claps, one-shots courts.",
+            "        A eviter sur les nappes : ca respire.",
+            "",
+            "loop  - boucles rythmiques ou melodiques. Fondus minuscules",
+            "        pour ne pas casser le raccord en lecture bouclee.",
+            "",
+            "sub   - basses et subs. Coupe tres bas (20 Hz) et pas de",
+            "        saturation : le grave reste propre.",
+            "",
+            "voix  - voix et field recordings. Coupe a 90 Hz pour virer",
+            "        le souffle, les bruits de manipulation, le vent.",
+        ],
+    },
+    {
+        "titre": "Ce que fait la chaine de traitement",
+        "lignes": [
+            "1. Offset DC : recentre le signal. Un sample decale perd de",
+            "   la marge des deux cotes.",
+            "",
+            "2. Passe-haut : coupe le grave inaudible. C'est souvent",
+            "   +3 dB gratuits, l'energie sous 40 Hz mange la dynamique",
+            "   sans qu'on l'entende.",
+            "",
+            "3. Coupe des silences : gagne de la memoire volca.",
+            "",
+            "4. Transient shaper : accentue l'attaque independamment du",
+            "   volume. Plus utile qu'un compresseur sur les percussions.",
+            "",
+            "5. Compression : reduit l'ecart crete/moyenne, donc permet",
+            "   de monter beaucoup plus haut avant d'ecreter.",
+            "",
+            "6. Saturation : ajoute des harmoniques au lieu d'ecreter.",
+            "   Le son parait plus fort sans monter le niveau.",
+            "",
+            "7. Mise a niveau RMS ou LUFS : la cible de volume.",
+            "",
+            "8. Fondus courts : evite les clics au declenchement.",
+            "",
+            "9. Limiteur avec lookahead : plafonne sans distordre.",
+        ],
+    },
+    {
+        "titre": "Reglages fins",
+        "lignes": [
+            "GAIN (curseur) : s'ajoute au preset. Utile pour rattraper un",
+            "sample qui ressort trop fort ou trop faible dans le kit.",
+            "Commence par +/- 2 dB, c'est deja audible.",
+            "",
+            "QUALITE (envoi) : 16 = qualite maximale, transfert le plus",
+            "long. Descendre a 12 ou 10 divise la duree du transfert.",
+            "Sur des percussions courtes la difference s'entend a peine.",
+            "",
+            "Astuce : la volca compresse les samples en interne. Un signal",
+            "bien chaud au depart subit moins de bruit de quantification.",
+            "C'est une raison de plus de ne pas envoyer un sample faible.",
+        ],
+    },
+    {
+        "titre": "Memoire : 65 secondes en tout",
+        "lignes": [
+            "La volca sample a environ 65 s de memoire pour 100 slots.",
+            "La volca sample2 en a environ 130 s.",
+            "",
+            "Ce n'est pas beaucoup. Trois leviers pour tenir :",
+            "",
+            "1. Couper les silences (les presets punch et max le font)",
+            "",
+            "2. Raccourcir les samples. Un kick n'a pas besoin de 2 s,",
+            "   300 ms suffisent souvent.",
+            "",
+            "3. Baisser le taux d'echantillonnage. Le Syro accepte",
+            "   n'importe quel Fs. Une nappe sombre a 22 kHz sonne pareil",
+            "   et coute moitie moins cher. L'application propose un taux",
+            "   automatiquement quand le sample n'a pas d'aigu.",
+            "",
+            "La jauge dans l'onglet SLOTS passe en rouge au depassement.",
+        ],
+    },
+    {
+        "titre": "Reussir le transfert",
+        "lignes": [
+            "1. Cable jack 3,5 mm : sortie casque vers SYNC IN de la volca",
+            "2. Volume de l'appareil A FOND",
+            "3. Bluetooth COUPE (sinon le son part ailleurs)",
+            "4. Aucun egaliseur, pas de Dolby, pas d'Adapt Sound",
+            "5. Lancer, puis ne toucher a rien jusqu'a la fin",
+            "",
+            "La volca affiche sa progression et redemarre a la fin.",
+            "",
+            "Si ca echoue : c'est presque toujours le volume trop bas ou",
+            "un traitement audio du telephone qui abime le signal.",
+            "",
+            "L'envoi ECRASE le slot sans demander confirmation. Teste sur",
+            "un slot vide ou dont tu n'as pas besoin.",
+        ],
+    },
+    {
+        "titre": "Fichiers projet",
+        "lignes": [
+            "Sauver projet cree un fichier .volca.json qui memorise quel",
+            "WAV va dans quel slot, avec son preset et son gain.",
+            "",
+            "Interet : retrouver exactement son kit, le re-envoyer apres",
+            "avoir bidouille la volca, en avoir plusieurs (kit techno,",
+            "kit live, kit demo), les partager, les versionner dans git.",
+            "",
+            "Le fichier ne contient pas les sons, seulement les chemins.",
+            "Ne deplace pas tes WAV apres avoir sauve.",
+        ],
+    },
+    {
+        "titre": "En ligne de commande",
+        "lignes": [
+            "Tout est aussi disponible dans un terminal :",
+            "",
+            "  python cli.py info samples/",
+            "  python cli.py traiter samples/ -o out/ -p punch",
+            "  python cli.py projet creer mon_kit --dossier out/",
+            "  python cli.py memoire mon_kit.volca.json",
+            "  python cli.py envoyer mon_kit.volca.json --jouer",
+            "  python cli.py rapide 3 kick.wav --jouer",
+            "  python cli.py effacer 3,7-9 --jouer",
+            "  python cli.py syro",
+            "",
+            "Aucune dependance : ca marche dans Termux tel quel.",
+        ],
+    },
+]
+
+
+def titres():
+    return [s["titre"] for s in SECTIONS]
+
+
+def texte(index=None):
+    """Rend le tutoriel en texte. index=None -> tout."""
+    cibles = SECTIONS if index is None else [SECTIONS[index]]
+    out = []
+    for s in cibles:
+        out.append("=== %s ===" % s["titre"].upper())
+        out.extend(s["lignes"])
+        out.append("")
+    return "\n".join(out)
