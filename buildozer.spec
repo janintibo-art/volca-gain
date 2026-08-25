@@ -23,6 +23,7 @@ android.ndk_api = 24
 android.archs = arm64-v8a
 android.allow_backup = 1
 android.accept_sdk_license = True
+p4a.branch = v2024.01.21
 
 # Bibliotheque Syro compilee au prealable (voir native/README.md).
 # Si les fichiers sont absents, l'APK se construit quand meme : l'application
@@ -38,4 +39,3 @@ android.add_libs_armeabi_v7a = native/prebuilt/android/armeabi-v7a/*.so
 log_level = 2
 warn_on_root = 0
 
-p4a.branch = v2024.01.21
