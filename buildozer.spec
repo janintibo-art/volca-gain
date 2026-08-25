@@ -16,7 +16,7 @@ orientation = portrait
 fullscreen = 0
 
 android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
-android.api = 34
+android.api = 33
 android.ndk = 25b
 android.minapi = 24
 android.ndk_api = 24
@@ -37,3 +37,5 @@ android.add_libs_armeabi_v7a = native/prebuilt/android/armeabi-v7a/*.so
 [buildozer]
 log_level = 2
 warn_on_root = 0
+
+p4a.branch = v2024.01.21
