@@ -543,8 +543,8 @@ class EcranEditeur(BoxLayout):
                              color=TEXTE_2)
         self.add_widget(self.lbl_nom)
 
-        cadre = Panneau(orientation="vertical", size_hint_y=None,
-                        height=dp(160), padding=dp(6))
+        cadre = Panneau(orientation="vertical", size_hint_y=1,
+                        padding=dp(6))
         self.onde = Onde(on_change=self._maj_temps)
         cadre.add_widget(self.onde)
         self.add_widget(cadre)
@@ -599,8 +599,6 @@ class EcranEditeur(BoxLayout):
         b_exp.bind(on_release=lambda *_: self.exporter())
         r4.add_widget(b_exp)
         self.add_widget(r4)
-
-        self.add_widget(BoxLayout())
 
     # ------------------------------------------------------------ chargement
     def _charger(self, chemin):
@@ -1000,7 +998,7 @@ class Root(BoxLayout):
         self.zone = BoxLayout()
         self.add_widget(self.zone)
 
-        sv = ScrollView(size_hint_y=0.26)
+        sv = ScrollView(size_hint_y=0.22)
         self.log = Label(text="Pret.\n", size_hint_y=None, halign="left",
                          valign="top", font_size=dp(11), color=TEXTE_2)
         self.log.bind(texture_size=lambda i, v: setattr(i, "height", v[1]),
