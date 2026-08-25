@@ -1,0 +1,3 @@
+# Le moteur audio et cli.py n'ont AUCUNE dependance (stdlib uniquement).
+# Kivy sert seulement a l'interface graphique.
+kivy==2.3.0

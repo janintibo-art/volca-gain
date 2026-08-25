@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+build/
+dist/
+bin/
+.buildozer/
+*.spec.bak
+volca_out/
+*_volca.wav
+.venv/
+.idea/
+.vscode/
+.DS_Store
+
+# couche native
+native/build*/
+native/prebuilt/**/*.so
+native/prebuilt/**/*.dll
+*.volca.json
+transfert.wav
+effacement.wav
