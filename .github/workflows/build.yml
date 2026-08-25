@@ -9,11 +9,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Un nouveau push annule le run precedent : plus de runs empiles qui se
+# disputent le cache buildozer.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
 
   # ---------------------------------------------------------------- tests
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,6 +33,7 @@ jobs:
   syro-android:
     needs: tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       built: ${{ steps.check.outputs.built }}
     steps:
@@ -71,6 +79,7 @@ jobs:
   windows-exe:
     needs: tests
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -151,7 +160,7 @@ jobs:
       - name: Installer buildozer
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install buildozer==1.5.0 "cython==0.29.36" virtualenv
+          pip install buildozer==1.5.0 "cython==3.0.11" virtualenv
 
       - name: Cache SDK / NDK / dependances
         uses: actions/cache@v4
