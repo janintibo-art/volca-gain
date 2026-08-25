@@ -39,8 +39,7 @@ jobs:
             echo "built=true" >> $GITHUB_OUTPUT
           else
             echo "built=false" >> $GITHUB_OUTPUT
-            echo "SDK Korg absent : ajoute-le avec"
-            echo "  git submodule add https://github.com/korginc/volcasample native/volcasample"
+            echo "SDK Korg absent"
           fi
       - uses: nttld/setup-ndk@v1
         if: steps.check.outputs.built == 'true'
@@ -107,30 +106,69 @@ jobs:
           path: dist/*
 
   # ------------------------------------------------------------ Android
+  # buildozer installe directement : les actions Docker toutes faites ne sont
+  # plus maintenues. Premier build long (SDK/NDK telecharges), ensuite cache.
   android-apk:
     needs: [tests, syro-android]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
       - name: Recuperer libsyro.so
         if: needs.syro-android.outputs.built == 'true'
         uses: actions/download-artifact@v4
         with:
           name: syro-android
           path: native/prebuilt/android
+
       - name: Neutraliser add_libs si la lib est absente
         run: |
           if [ ! -f native/prebuilt/android/arm64-v8a/libsyro.so ]; then
             sed -i 's/^android.add_libs/# android.add_libs/' buildozer.spec
             echo "APK sans envoi direct"
+          else
+            ls -l native/prebuilt/android/*/libsyro.so
           fi
-      - name: Build APK
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
+
+      - uses: actions/setup-python@v5
         with:
-          command: buildozer android debug
-          buildozer_version: stable
+          python-version: "3.11"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Dependances systeme
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev build-essential ccache
+
+      - name: Installer buildozer
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install buildozer==1.5.0 "cython==0.29.36" virtualenv
+
+      - name: Cache SDK / NDK / dependances
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-${{ runner.os }}-
+
+      - name: Build APK
+        run: buildozer -v android debug
+
+      - name: Lister le resultat
+        run: ls -lh bin/ || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: VolcaGain-android
-          path: ${{ steps.buildozer.outputs.filename }}
+          path: bin/*.apk
