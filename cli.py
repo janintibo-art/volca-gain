@@ -140,6 +140,23 @@ def cmd_projet(a):
         print("slot %02d <- %s (%.0f ms)" % (s.index, s.nom, s.duree_ms))
         return 0
 
+    if a.action == "optimiser":
+        p = project.Projet.charger(a.nom)
+        avant = p.memoire_utilisee_s()
+        rap, gagne = p.optimiser()
+        for r in rap:
+            if "erreur" in r:
+                print("  %02d %-20s ECHEC %s" % (r["slot"], r["nom"][:20],
+                                                 r["erreur"]))
+            else:
+                print("  %02d %-20s -> %d Hz  (%.2f s)" % (
+                    r["slot"], r["nom"][:20], r["taux"], r["eco_s"]))
+        p.sauver()
+        print()
+        print("memoire %.1f s -> %.1f s  (%.1f s recuperees)" % (
+            avant, p.memoire_utilisee_s(), gagne))
+        return 0
+
     if a.action == "vider":
         p = project.Projet.charger(a.nom)
         for i in _parse_slots(str(a.slot)):
@@ -176,6 +193,9 @@ def cmd_envoyer(a):
             preset, gain = presets.get(idx, ("punch", 0.0))
             s = audio.read_wav(chemin)
             s, _ = audio.process(s, preset, gain)
+            slot = p.slots[idx]
+            if slot.taux:
+                audio.changer_taux(s, slot.taux)
             out = os.path.join(d, "%02d.wav" % idx)
             audio.write_wav(out, s)
             tmp.append(out)
@@ -298,7 +318,8 @@ def build_parser():
     p.set_defaults(func=cmd_traiter)
 
     p = sub.add_parser("projet", help="gerer les 100 slots")
-    p.add_argument("action", choices=["creer", "voir", "ajouter", "vider"])
+    p.add_argument("action",
+                   choices=["creer", "voir", "ajouter", "vider", "optimiser"])
     p.add_argument("nom")
     p.add_argument("slot", nargs="?", type=int)
     p.add_argument("wav", nargs="?")

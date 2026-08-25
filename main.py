@@ -113,6 +113,39 @@ class Bouton(Button):
         self._maj()
 
 
+class SlotBouton(Bouton):
+    """Bouton de slot affichant une mini forme d'onde."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._apercu = None
+        self.bind(pos=self._dessiner, size=self._dessiner)
+
+    def set_apercu(self, peaks):
+        self._apercu = peaks
+        self._dessiner()
+
+    def _dessiner(self, *_a):
+        self.canvas.after.clear()
+        if not self._apercu or self.width < 8:
+            return
+        n = len(self._apercu)
+        w = self.width - dp(4)
+        h = self.height * 0.42
+        x0 = self.x + dp(2)
+        mid = self.y + h / 2.0 + dp(2)
+        demi = h / 2.0
+        with self.canvas.after:
+            Color(1, 1, 1, 0.55)
+            for i, (mn, mx) in enumerate(self._apercu):
+                x = x0 + (i + 0.5) * w / n
+                a = mid + max(mn, -1.0) * demi
+                b = mid + min(mx, 1.0) * demi
+                if b - a < 1:
+                    b = a + 1
+                Line(points=[x, a, x, b], width=1)
+
+
 class Panneau(BoxLayout):
     """Conteneur avec fond arrondi, pour donner du relief."""
 
@@ -756,6 +789,7 @@ class EcranSlots(BoxLayout):
         self.projet = project.Projet("mon_kit")
         self.busy = False
         self.dernier_flux = None
+        self._cache_apercu = {}
 
         self.lbl_mem = Label(text="", size_hint_y=None, height=dp(24),
                              font_size=dp(12), color=TEXTE)
@@ -769,8 +803,9 @@ class EcranSlots(BoxLayout):
         self.grille.bind(minimum_height=self.grille.setter("height"))
         self.boutons = []
         for i in range(project.NB_SLOTS):
-            b = Bouton(text="%02d" % i, font_size=dp(11), size_hint_y=None,
-                       height=dp(38), couleur=GRIS, rayon=5)
+            b = SlotBouton(text="%02d" % i, font_size=dp(10),
+                           size_hint_y=None, height=dp(42),
+                           couleur=GRIS, rayon=5)
             b.bind(on_release=lambda w, idx=i: SlotPopup(self, idx).open())
             self.boutons.append(b)
             self.grille.add_widget(b)
@@ -792,7 +827,7 @@ class EcranSlots(BoxLayout):
         b_c.bind(on_release=lambda *_: Chooser(
             self._charger, filtres=["*.json"]).open())
         r1.add_widget(b_c)
-        b_m = Bouton(text="Memoire", couleur=BLEU)
+        b_m = Bouton(text="Optimiser", couleur=BLEU)
         b_m.bind(on_release=lambda *_: self._memoire())
         r1.add_widget(b_m)
         self.add_widget(r1)
@@ -835,15 +870,43 @@ class EcranSlots(BoxLayout):
         for i, b in enumerate(self.boutons):
             slot = p.slots[i]
             b.set_couleur(ORANGE_S if not slot.vide else GRIS)
-            b.text = ("%02d\n%s" % (i, slot.nom[:6])) if not slot.vide \
-                else "%02d" % i
+            if slot.vide:
+                b.text = "%02d" % i
+                b.set_apercu(None)
+            else:
+                marque = "*" if slot.taux else ""
+                b.text = "%02d%s\n%s" % (i, marque, slot.nom[:5])
+                b.set_apercu(self._cache_apercu.get(slot.chemin))
             b.halign = "center"
+        threading.Thread(target=self._calculer_apercus, daemon=True).start()
         pct = p.memoire_pct()
         self.bar.value = min(pct, 100)
         self.lbl_mem.text = "%d/%d slots - %.1f s / %.0f s (%.0f %%)%s" % (
             len(p.occupes()), project.NB_SLOTS, p.memoire_utilisee_s(),
             p.memoire_totale_s(), pct,
             "  MEMOIRE DEPASSEE" if p.depassement() else "")
+
+    def _calculer_apercus(self):
+        """Calcule les mini formes d'onde manquantes, en tache de fond."""
+        nouveaux = False
+        for slot in self.projet.occupes():
+            if slot.chemin in self._cache_apercu:
+                continue
+            try:
+                s = audio.read_wav(slot.chemin)
+                self._cache_apercu[slot.chemin] = audio.peaks(s, 18)
+                nouveaux = True
+            except Exception:  # noqa: BLE001
+                self._cache_apercu[slot.chemin] = None
+        if nouveaux:
+            self._poser_apercus()
+
+    @mainthread
+    def _poser_apercus(self):
+        for i, b in enumerate(self.boutons):
+            slot = self.projet.slots[i]
+            if not slot.vide:
+                b.set_apercu(self._cache_apercu.get(slot.chemin))
 
     def _remplir(self, dossier):
         places = self.projet.remplir_depuis_dossier(dossier)
@@ -870,23 +933,34 @@ class EcranSlots(BoxLayout):
         threading.Thread(target=self._worker_memoire, daemon=True).start()
 
     def _worker_memoire(self):
-        self.journal("--- MEMOIRE ---")
-        gagne = 0.0
-        for slot in self.projet.occupes():
-            try:
-                s = audio.read_wav(slot.chemin)
-            except Exception:  # noqa: BLE001
-                continue
-            taux = audio.taux_conseille(s)
-            if taux < s.rate:
-                eco = (slot.duree_ms / 1000.0) * (1.0 - taux / float(s.rate))
-                gagne += eco
-                self.journal("  %02d %-14s %d Hz -> %.2f s" % (
-                    slot.index, slot.nom[:14], taux, eco))
+        if not self.projet.occupes():
+            self.journal("Aucun slot rempli.")
+            return
+        self.journal("--- OPTIMISATION MEMOIRE ---")
+        avant = self.projet.memoire_utilisee_s()
+
+        def prog(n, total, slot):
+            if n % 5 == 0 or n == total:
+                self.journal("  analyse %d/%d" % (n, total))
+
+        rap, gagne = self.projet.optimiser(prog)
+        for r in rap:
+            if "erreur" in r:
+                self.journal("  %02d %-12s ECHEC" % (r["slot"], r["nom"][:12]))
+            else:
+                self.journal("  %02d %-12s -> %d Hz  (%.2f s)" % (
+                    r["slot"], r["nom"][:12], r["taux"], r["eco_s"]))
         if gagne:
-            self.journal("Recuperable : %.1f s" % gagne)
+            self.journal("Memoire %.1f s -> %.1f s, %.1f s recuperees." % (
+                avant, self.projet.memoire_utilisee_s(), gagne))
+            self.journal("Les slots optimises sont marques d'une etoile.")
         else:
-            self.journal("Rien a gagner.")
+            self.journal("Rien a gagner : tous ont besoin de leur aigu.")
+        self._apres_optim()
+
+    @mainthread
+    def _apres_optim(self):
+        self.rafraichir()
 
     @mainthread
     def _fin(self):
@@ -914,6 +988,8 @@ class EcranSlots(BoxLayout):
             for n, slot in enumerate(occ, 1):
                 s = audio.read_wav(slot.chemin)
                 s, _ = audio.process(s, slot.preset, slot.gain_db)
+                if slot.taux:
+                    audio.changer_taux(s, slot.taux)
                 out = os.path.join(d, "%02d.wav" % slot.index)
                 audio.write_wav(out, s)
                 prepares.append((slot.index, out))

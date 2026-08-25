@@ -22,7 +22,7 @@ MEMOIRE = {"sample": 65.0, "sample2": 130.0}
 
 class Slot:
     def __init__(self, index, chemin=None, preset="punch", gain_db=0.0,
-                 nom=None, duree_ms=0.0):
+                 nom=None, duree_ms=0.0, taux=None):
         self.index = index
         self.chemin = chemin
         self.preset = preset
@@ -30,10 +30,20 @@ class Slot:
         self.nom = nom or (os.path.splitext(os.path.basename(chemin))[0]
                            if chemin else "")
         self.duree_ms = duree_ms
+        # taux d'echantillonnage force (None = taux d'origine).
+        # Baisser le taux divise d'autant le cout en memoire volca.
+        self.taux = taux
 
     @property
     def vide(self):
         return not self.chemin
+
+    def cout_s(self):
+        """Cout reel en secondes de memoire volca."""
+        base = self.duree_ms / 1000.0
+        if self.taux:
+            return base * (self.taux / float(audio.TARGET_RATE))
+        return base
 
     def analyser(self):
         """Lit le WAV et met a jour nom / duree. Renvoie les infos."""
@@ -47,13 +57,14 @@ class Slot:
     def to_dict(self):
         return {"index": self.index, "chemin": self.chemin,
                 "preset": self.preset, "gain_db": self.gain_db,
-                "nom": self.nom, "duree_ms": self.duree_ms}
+                "nom": self.nom, "duree_ms": self.duree_ms,
+                "taux": self.taux}
 
     @staticmethod
     def from_dict(d):
         return Slot(d["index"], d.get("chemin"), d.get("preset", "punch"),
                     d.get("gain_db", 0.0), d.get("nom"),
-                    d.get("duree_ms", 0.0))
+                    d.get("duree_ms", 0.0), d.get("taux"))
 
 
 class Projet:
@@ -95,7 +106,40 @@ class Projet:
         return [s for s in self.slots if not s.vide]
 
     def memoire_utilisee_s(self):
-        return sum(s.duree_ms for s in self.occupes()) / 1000.0
+        return sum(s.cout_s() for s in self.occupes())
+
+    def optimiser(self, progression=None):
+        """Baisse le taux des samples qui n'ont pas besoin de leur aigu.
+
+        Le Syro accepte n'importe quel Fs : une nappe sombre a 22 kHz sonne
+        pareil et coute moitie moins cher en memoire.
+        Renvoie (rapport, secondes_gagnees).
+        """
+        rapport = []
+        gagne = 0.0
+        occ = self.occupes()
+        for n, slot in enumerate(occ, 1):
+            try:
+                s = audio.read_wav(slot.chemin)
+            except Exception as e:  # noqa: BLE001
+                rapport.append({"slot": slot.index, "nom": slot.nom,
+                                "erreur": str(e)})
+                continue
+            avant = slot.cout_s()
+            taux = audio.taux_conseille(s)
+            if taux < audio.TARGET_RATE:
+                slot.taux = taux
+                eco = avant - slot.cout_s()
+                gagne += eco
+                rapport.append({"slot": slot.index, "nom": slot.nom,
+                                "taux": taux, "eco_s": round(eco, 3)})
+            if progression:
+                progression(n, len(occ), slot)
+        return rapport, round(gagne, 2)
+
+    def reinitialiser_taux(self):
+        for s in self.occupes():
+            s.taux = None
 
     def memoire_totale_s(self):
         return MEMOIRE[self.modele]
@@ -114,8 +158,9 @@ class Projet:
         if self.depassement():
             lignes.append("  ATTENTION : memoire depassee, raccourcis des samples")
         for s in self.occupes():
-            lignes.append("  %02d  %-24s %6.0f ms  %-6s %+.1f dB" % (
-                s.index, s.nom[:24], s.duree_ms, s.preset, s.gain_db))
+            taux = ("  %d Hz" % s.taux) if s.taux else ""
+            lignes.append("  %02d  %-22s %6.0f ms  %-6s %+.1f dB%s" % (
+                s.index, s.nom[:22], s.duree_ms, s.preset, s.gain_db, taux))
         return "\n".join(lignes)
 
     # ------------------------------------------------------------ envoi

@@ -66,3 +66,64 @@ class TestProjet(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOptimisation(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        # son sombre : pas d'aigu, donc taux reductible
+        self.sombre = os.path.join(self.tmp, "sombre.wav")
+        make_wav(self.sombre, secs=1.0, amp=0.3, freq=60.0)
+        # son clair : a besoin de son aigu
+        self.clair = os.path.join(self.tmp, "clair.wav")
+        make_wav(self.clair, secs=1.0, amp=0.3, freq=9000.0)
+
+    def test_cout_suit_le_taux(self):
+        p = project.Projet("t")
+        s = p.assigner(0, self.sombre)
+        avant = s.cout_s()
+        s.taux = 22050
+        self.assertAlmostEqual(s.cout_s(), avant / 2.0, delta=0.05)
+
+    def test_optimiser_reduit_le_sombre(self):
+        p = project.Projet("t")
+        p.assigner(0, self.sombre)
+        avant = p.memoire_utilisee_s()
+        rap, gagne = p.optimiser()
+        self.assertEqual(len(rap), 1)
+        self.assertLess(p.slots[0].taux, 44100)
+        self.assertGreater(gagne, 0.2)
+        self.assertLess(p.memoire_utilisee_s(), avant)
+
+    def test_optimiser_epargne_laigu(self):
+        p = project.Projet("t")
+        p.assigner(3, self.clair)
+        _rap, gagne = p.optimiser()
+        self.assertIsNone(p.slots[3].taux)
+        self.assertEqual(gagne, 0.0)
+
+    def test_progression_appelee(self):
+        p = project.Projet("t")
+        p.assigner(0, self.sombre)
+        p.assigner(1, self.clair)
+        vus = []
+        p.optimiser(lambda n, total, slot: vus.append((n, total)))
+        self.assertEqual(vus, [(1, 2), (2, 2)])
+
+    def test_taux_survit_a_la_sauvegarde(self):
+        p = project.Projet("t")
+        p.assigner(0, self.sombre)
+        p.optimiser()
+        taux = p.slots[0].taux
+        f = p.sauver(os.path.join(self.tmp, "k.volca.json"))
+        q = project.Projet.charger(f)
+        self.assertEqual(q.slots[0].taux, taux)
+        self.assertAlmostEqual(q.memoire_utilisee_s(),
+                               p.memoire_utilisee_s(), delta=0.01)
+
+    def test_reinitialiser(self):
+        p = project.Projet("t")
+        p.assigner(0, self.sombre)
+        p.optimiser()
+        p.reinitialiser_taux()
+        self.assertIsNone(p.slots[0].taux)
