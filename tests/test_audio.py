@@ -178,3 +178,45 @@ class TestDSP(unittest.TestCase):
             s, r = audio.process(s, nom)
             self.assertLessEqual(s.peak_db(), 0.0, nom)
             self.assertIn("gain_lufs", r)
+
+
+class TestEditeur(unittest.TestCase):
+    """Logique utilisee par l'onglet EDITEUR, sans Kivy."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = os.path.join(self.tmp, "e.wav")
+        make_wav(self.p, secs=1.0, amp=0.3, rate=44100)
+        self.s = audio.read_wav(self.p)
+
+    def test_peaks_taille(self):
+        p = audio.peaks(self.s, 200)
+        self.assertGreaterEqual(len(p), 190)
+        self.assertLessEqual(len(p), 210)
+        for mn, mx in p:
+            self.assertLessEqual(mn, mx)
+            self.assertGreaterEqual(mn, -1.0)
+            self.assertLessEqual(mx, 1.0)
+
+    def test_peaks_sample_vide(self):
+        self.assertEqual(audio.peaks(audio.Sample([], 44100)), [])
+
+    def test_copie_ne_touche_pas_loriginal(self):
+        avant = len(self.s.data)
+        c = audio.copie_decoupee(self.s, 100.0, 400.0)
+        self.assertEqual(len(self.s.data), avant)
+        self.assertAlmostEqual(c.duration_ms, 300, delta=25)
+
+    def test_chaine_selection_puis_traitement(self):
+        """Ce que fait le bouton B de l'editeur."""
+        sel = audio.copie_decoupee(self.s, 200.0, 700.0)
+        sel, rap = audio.process(sel, "punch")
+        self.assertAlmostEqual(sel.duration_ms, 500, delta=40)
+        self.assertLessEqual(sel.peak_db(), 0.0)
+        self.assertIn("gain_lufs", rap)
+
+    def test_selection_minuscule(self):
+        c = audio.copie_decoupee(self.s, 10.0, 15.0)
+        self.assertGreater(len(c.data), 0)
+        c, _ = audio.process(c, "doux")
+        self.assertGreater(len(c.data), 0)

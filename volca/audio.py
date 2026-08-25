@@ -649,3 +649,31 @@ def process(sample, preset="punch", extra_gain_db=0.0, overrides=None):
         "gain_db": round(after["rms_db"] - before["rms_db"], 2),
         "gain_lufs": round(after["lufs"] - before["lufs"], 2),
     }
+
+
+# --------------------------------------------------------------------------
+# Affichage de la forme d'onde
+# --------------------------------------------------------------------------
+def peaks(sample, colonnes=400):
+    """Reduit le sample a une liste de (min, max) par colonne d'affichage.
+
+    C'est ce qui permet de dessiner une forme d'onde sans parcourir des
+    centaines de milliers d'echantillons a chaque rafraichissement.
+    """
+    d = sample.data
+    n = len(d)
+    if n == 0 or colonnes < 1:
+        return []
+    pas = max(1, n // colonnes)
+    out = []
+    for i in range(0, n, pas):
+        bloc = d[i:i + pas]
+        if bloc:
+            out.append((min(bloc), max(bloc)))
+    return out
+
+
+def copie_decoupee(sample, debut_ms, fin_ms, zero=True):
+    """Comme decouper(), mais renvoie une copie sans toucher a l'original."""
+    c = sample.copy()
+    return decouper(c, debut_ms, fin_ms, zero)
