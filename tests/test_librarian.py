@@ -206,3 +206,72 @@ class TestProgrammes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFichierPatternsSeul(unittest.TestCase):
+    """Un .vlcsplpatt : meme conteneur, mais sans aucun son."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.f = os.path.join(self.tmp, "p.vlcsplpatt")
+        with zipfile.ZipFile(self.f, "w") as z:
+            z.writestr(librarian.INFO_FICHIER, INFO % ("volca sample 2", 1, 0))
+            z.writestr("Prog_000.prog_info", PROG % "Scratching")
+            z.writestr("Prog_000.prog_bin",
+                       programme("Scratching",
+                                 [(128, 0b0001000100010001, 127, 0b10),
+                                  (3, 0b0000000100000001, 100, 0)]))
+
+    def test_reconnu(self):
+        self.assertTrue(librarian.est_fichier_korg(self.f))
+
+    def test_infos(self):
+        i = librarian.infos(self.f)
+        self.assertEqual(i["sons"], 0)
+        self.assertEqual(i["emplacements"], 0)
+        self.assertEqual(i["programmes"], 1)
+
+    def test_import_sans_son_ne_plante_pas(self):
+        p, rap = librarian.importer(self.f, os.path.join(self.tmp, "out"))
+        self.assertEqual(rap, [])
+        self.assertEqual(len(p.occupes()), 0)
+
+    def test_pattern_lisible(self):
+        progs = librarian.programmes(self.f)
+        self.assertEqual(len(progs), 1)
+        self.assertEqual(progs[0]["nom"], "Scratching")
+        self.assertEqual(progs[0]["parties"][0]["liste_pas"], [1, 5, 9, 13])
+
+
+class TestConversion(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.f = sauvegarde(
+            os.path.join(self.tmp, "c.vlcspllib"), {},
+            progs=[("Groove", [(42, 0b0001000100010001, 120, 0b110),
+                               (7, 0b1000000000000001, 90, 0b10000)])])
+
+    def test_vers_motif(self):
+        prog = librarian.programmes(self.f)[0]
+        m = librarian.vers_motif(prog)
+        self.assertEqual(m.nom, "Groove")
+        self.assertEqual(m.partie(1).sample_num, 42)
+        self.assertEqual(m.partie(1).liste_pas(), [1, 5, 9, 13])
+        self.assertEqual(m.partie(1).level, 120)
+        self.assertTrue(m.partie(1).actif("loop"))
+        self.assertTrue(m.partie(1).actif("reverb"))
+        self.assertTrue(m.partie(2).actif("mute"))
+
+    def test_motif_converti_est_valide(self):
+        """La conversion doit produire un pattern premiere generation."""
+        prog = librarian.programmes(self.f)[0]
+        b = librarian.vers_motif(prog).to_bytes()
+        self.assertEqual(len(b), 0xA40)
+        from volca import pattern as pat
+        relu = pat.Motif.from_bytes(b)
+        self.assertEqual(relu.partie(1).sample_num, 42)
+
+    def test_fichier_quelconque_non_reconnu(self):
+        f = os.path.join(self.tmp, "x.dat")
+        open(f, "wb").write(b"\x00" * 100)
+        self.assertFalse(librarian.est_fichier_korg(f))

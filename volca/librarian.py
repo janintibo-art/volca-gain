@@ -23,7 +23,7 @@ import re
 import struct
 import zipfile
 
-from . import audio, project
+from . import audio, pattern, project
 
 # Frequence interne de la volca. Les .smpl_bin ne portent aucune en-tete :
 # c'est du PCM brut, il faut donc connaitre le taux pour les relire.
@@ -199,6 +199,34 @@ def programmes(chemin):
             except Exception as e:  # noqa: BLE001
                 out.append({"index": num, "nom": nom, "erreur": str(e)})
     return out
+
+
+def vers_motif(prog):
+    """Convertit un programme Korg decode en Motif editable.
+
+    Attention : le Motif utilise le format de la volca sample PREMIERE
+    generation (2624 octets). La conversion garde ce qui est commun aux
+    deux machines (sample, pas, niveau, fonctions) et abandonne le reste,
+    notamment les motions, dont la disposition differe.
+    """
+    m = pattern.vierge(prog.get("nom", "importe"))
+    for p in prog["parties"]:
+        cible = m.partie(p["partie"])
+        cible.sample_num = p["sample"]
+        cible.pas = p["pas"]
+        cible.level = p["level"]
+        for nom in ("loop", "reverb", "reverse", "mute"):
+            cible.mettre(nom, p.get(nom, False))
+    return m
+
+
+def est_fichier_korg(chemin):
+    """True si le fichier ressemble a une sauvegarde du librarian."""
+    try:
+        with zipfile.ZipFile(chemin, "r") as z:
+            return INFO_FICHIER in z.namelist()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def grille(prog):

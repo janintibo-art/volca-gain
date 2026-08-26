@@ -615,7 +615,8 @@ class KitPopup(Popup):
         """Sauvegarde .vlcspllib produite par le librarian officiel."""
         self.dismiss()
         Chooser(self.ecran.importer_librairie,
-                filtres=["*.vlcspllib", "*.VLCSPLLIB", "*.zip"]).open()
+                filtres=["*.vlcspllib", "*.VLCSPLLIB", "*.vlcsplpatt",
+                         "*.VLCSPLPATT", "*.zip"]).open()
 
 
 class Chooser(Popup):
@@ -672,6 +673,34 @@ class ChoixSlot(Popup):
     def _choisi(self, i):
         self.dismiss()
         self.callback(i)
+
+
+class ChoixProgramme(Popup):
+    """Liste les programmes d'une sauvegarde Korg."""
+
+    def __init__(self, progs, callback, **kw):
+        super().__init__(title="Quel pattern ?", size_hint=(0.94, 0.8), **kw)
+        self.callback = callback
+        sv = ScrollView()
+        box = BoxLayout(orientation="vertical", spacing=dp(4),
+                        size_hint_y=None, padding=dp(6))
+        box.bind(minimum_height=box.setter("height"))
+        for p in progs:
+            if "erreur" in p:
+                continue
+            n = len(p["utilisees"])
+            b = Bouton(text="%02d  %s  (%d partie%s)" % (
+                p["index"], p["nom"][:20], n, "s" if n > 1 else ""),
+                font_size=dp(12), size_hint_y=None, height=dp(46),
+                couleur=ORANGE_S if n else GRIS)
+            b.bind(on_release=lambda w, x=p: self._choisi(x))
+            box.add_widget(b)
+        sv.add_widget(box)
+        self.add_widget(sv)
+
+    def _choisi(self, prog):
+        self.dismiss()
+        self.callback(prog)
 
 
 class SlotPopup(Popup):
@@ -1595,6 +1624,10 @@ class EcranSlots(BoxLayout):
             self.journal("%s : %d son(s) sur %d emplacements, %d patterns"
                          % (i["produit"], i["sons"], i["emplacements"],
                             i["programmes"]))
+            if i["sons"] == 0 and i["programmes"]:
+                self.journal("Ce fichier ne contient que des patterns.")
+                self.journal("Ouvre-le depuis l'onglet PATT. > Ouvrir.")
+                return
             self.journal("Extraction, cela peut prendre une minute...")
 
             def prog(n, total, num, nom):
@@ -1915,9 +1948,11 @@ class EcranPattern(BoxLayout):
         self.contenu.add_widget(r4)
 
         r5 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
-        b_o = Bouton(text="Ouvrir .dat", couleur=CYAN)
+        b_o = Bouton(text="Ouvrir", couleur=CYAN)
         b_o.bind(on_release=lambda *_: Chooser(
-            self._ouvrir, filtres=["*.dat", "*.DAT"]).open())
+            self._ouvrir, filtres=["*.dat", "*.DAT", "*.vlcsplpatt",
+                                   "*.VLCSPLPATT", "*.vlcspllib",
+                                   "*.VLCSPLLIB"]).open())
         r5.add_widget(b_o)
         b_s = Bouton(text="Enregistrer")
         b_s.bind(on_release=lambda *_: NomPopup(
@@ -2004,7 +2039,11 @@ class EcranPattern(BoxLayout):
 
     # ------------------------------------------------------------ fichiers
     def _ouvrir(self, chemin):
+        """Accepte un .dat Korg brut, ou une sauvegarde du librarian."""
         try:
+            if librarian.est_fichier_korg(chemin):
+                self._ouvrir_korg(chemin)
+                return
             self.motif = pattern.Motif.charger(chemin)
             self.spin_partie.text = "1"
             self.partie = 1
@@ -2016,6 +2055,32 @@ class EcranPattern(BoxLayout):
                             len(self.motif.parties_utilisees())))
         except Exception as e:  # noqa: BLE001
             self.journal("Lecture impossible : %s" % e)
+
+    def _ouvrir_korg(self, chemin):
+        progs = [p for p in librarian.programmes(chemin) if "erreur" not in p]
+        if not progs:
+            self.journal("Aucun pattern lisible dans ce fichier.")
+            return
+        self.journal("Sauvegarde Korg : %d pattern(s)." % len(progs))
+        if len(progs) == 1:
+            self._poser_korg(progs[0])
+        else:
+            ChoixProgramme(progs, self._poser_korg).open()
+
+    def _poser_korg(self, prog):
+        try:
+            self.motif = librarian.vers_motif(prog)
+            self.spin_partie.text = "1"
+            self.partie = 1
+            self.sl_sample.value = self._p().sample_num
+            self.sl_niveau.value = self._p().level
+            self.rafraichir()
+            self.journal("Pattern '%s' importe : %d partie(s)."
+                         % (self.motif.nom, len(self.motif.parties_utilisees())))
+            self.journal("Converti au format premiere generation : les "
+                         "motions ne sont pas reprises.")
+        except Exception as e:  # noqa: BLE001
+            self.journal("Import impossible : %s" % e)
 
     def _enregistrer(self, nom):
         try:
