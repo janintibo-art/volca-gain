@@ -15,7 +15,7 @@ a = Analysis(
             ('../assets/icon.png', 'assets')]
            + ([('../native/syro.dll', '.')]
               if os.path.isfile('native/syro.dll') else [])),
-    hiddenimports=['volca', 'volca.audio', 'volca.batch', 'volca.project', 'volca.syro', 'volca.tips', 'volca.reglages', 'volca.etat'],
+    hiddenimports=['volca', 'volca.audio', 'volca.batch', 'volca.project', 'volca.syro', 'volca.tips', 'volca.reglages', 'volca.etat', 'volca.kit'],
     hookspath=[],
     runtime_hooks=[],
     excludes=['numpy', 'scipy', 'matplotlib', 'tkinter'],

@@ -19,8 +19,8 @@ import argparse
 import os
 import sys
 
-from volca import (__version__, audio, batch, etat, project, reglages,
-                   syro, tips)
+from volca import (__version__, audio, batch, etat, kit, project,
+                   reglages, syro, tips)
 
 
 # ------------------------------------------------------------------ helpers
@@ -347,6 +347,49 @@ def cmd_memoire(a):
     return 0
 
 
+def cmd_kit(a):
+    if a.action == "exporter":
+        p = project.Projet.charger(a.source)
+        cible = a.sortie or (kit._nom_sur(p.nom) + ".kit.zip")
+
+        def prog(n, total, slot):
+            print("[%d/%d] slot %02d %s" % (n, total, slot.index,
+                                            slot.nom[:20]))
+
+        rap = kit.exporter(p, cible, not a.brut, prog)
+        ok = sum(1 for r in rap if "erreur" not in r)
+        for r in rap:
+            if "erreur" in r:
+                print("  %02d %-20s ECHEC %s" % (r["slot"], r["nom"][:20],
+                                                 r["erreur"]))
+        print()
+        print("%d son(s) -> %s  (%.1f Mo)" % (
+            ok, cible, os.path.getsize(cible) / 1048576.0))
+        return 0
+
+    if a.action == "infos":
+        i = kit.infos(a.source)
+        print("nom     : %s" % i["nom"])
+        print("modele  : %s" % i["modele"])
+        print("slots   : %d" % i["slots"])
+        print("sons    : %s" % ("deja traites" if i["traite"] else "bruts"))
+        return 0
+
+    # importer
+    dest = a.sortie or os.getcwd()
+
+    def prog2(n, total, interne):
+        print("[%d/%d] %s" % (n, total, os.path.basename(interne)))
+
+    p = kit.importer(a.source, dest, prog2)
+    etat.memoriser_projet(p.chemin_fichier)
+    print()
+    print(p.resume())
+    print()
+    print("Projet : %s" % p.chemin_fichier)
+    return 0
+
+
 def cmd_syro(_a):
     if syro.disponible():
         print("Envoi direct : DISPONIBLE (%s)" % syro.version())
@@ -440,6 +483,14 @@ def build_parser():
     p = sub.add_parser("memoire", help="analyser la memoire d'un projet")
     p.add_argument("projet")
     p.set_defaults(func=cmd_memoire)
+
+    p = sub.add_parser("kit", help="kit portable (zip sons + placement)")
+    p.add_argument("action", choices=["exporter", "importer", "infos"])
+    p.add_argument("source", help="projet .json ou kit .zip")
+    p.add_argument("-o", "--sortie")
+    p.add_argument("--brut", action="store_true",
+                   help="exporter les sons non traites")
+    p.set_defaults(func=cmd_kit)
 
     p = sub.add_parser("syro", help="tester l'envoi direct")
     p.set_defaults(func=cmd_syro)

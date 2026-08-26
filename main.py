@@ -45,8 +45,8 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
-from volca import (__version__, audio, batch, etat, project, reglages,
-                   syro, tips)
+from volca import (__version__, audio, batch, etat, kit, project,
+                   reglages, syro, tips)
 
 # ---------------------------------------------------------------- palette
 FOND = (0.055, 0.055, 0.07, 1)
@@ -428,6 +428,50 @@ class ReglagesPopup(Popup):
             self.on_valider(cfg, nom)
         except Exception as e:  # noqa: BLE001
             self.title = "Erreur : %s" % e
+
+
+class KitPopup(Popup):
+    """Exporter ou importer un kit portable."""
+
+    def __init__(self, ecran, **kw):
+        super().__init__(title="Kit portable", size_hint=(0.92, None),
+                         height=dp(300), **kw)
+        self.ecran = ecran
+        box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
+        box.add_widget(Label(
+            text="Un kit est un zip contenant les sons traites\n"
+                 "ET leur placement dans les 100 slots.\n"
+                 "De quoi changer de telephone ou partager.",
+            font_size=dp(12), color=TEXTE_2, size_hint_y=None, height=dp(70),
+            halign="center"))
+
+        b_e = Bouton(text="Exporter le kit", couleur=ORANGE,
+                     size_hint_y=None, height=dp(50))
+        b_e.bind(on_release=lambda *_: self._exporter())
+        box.add_widget(b_e)
+
+        b_i = Bouton(text="Importer un kit", couleur=CYAN,
+                     size_hint_y=None, height=dp(50))
+        b_i.bind(on_release=lambda *_: self._importer())
+        box.add_widget(b_i)
+
+        b_f = Bouton(text="Fermer", size_hint_y=None, height=dp(44))
+        b_f.bind(on_release=lambda *_: self.dismiss())
+        box.add_widget(b_f)
+        self.add_widget(box)
+
+    def _exporter(self):
+        if not self.ecran.projet.occupes():
+            self.ecran.journal("Aucun slot rempli.")
+            self.dismiss()
+            return
+        self.dismiss()
+        NomPopup("Nom du kit", self.ecran.projet.nom,
+                 self.ecran.exporter_kit).open()
+
+    def _importer(self):
+        self.dismiss()
+        Chooser(self.ecran.importer_kit, filtres=["*.zip"]).open()
 
 
 class Chooser(Popup):
@@ -1115,9 +1159,12 @@ class EcranSlots(BoxLayout):
         b_eg = Bouton(text="Egaliser le kit", couleur=VERT)
         b_eg.bind(on_release=lambda *_: self._egaliser())
         r1b.add_widget(b_eg)
-        b_t = Bouton(text="Tasser")
+        b_t = Bouton(text="Tasser", size_hint_x=0.6)
         b_t.bind(on_release=lambda *_: self._tasser())
         r1b.add_widget(b_t)
+        b_k = Bouton(text="Kit", size_hint_x=0.5)
+        b_k.bind(on_release=lambda *_: KitPopup(self).open())
+        r1b.add_widget(b_k)
         self.add_widget(r1b)
 
         r2 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
@@ -1274,6 +1321,69 @@ class EcranSlots(BoxLayout):
         places = self.projet.remplir_depuis_dossier(dossier)
         self.journal("%d sample(s) place(s)." % len(places))
         self.rafraichir()
+
+    def exporter_kit(self, nom):
+        if self.busy:
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_export, args=(nom,),
+                         daemon=True).start()
+
+    def _worker_export(self, nom):
+        try:
+            self.projet.nom = nom
+            cible = os.path.join(dossier_travail(),
+                                 "%s.kit.zip" % kit._nom_sur(nom))
+            self.journal("--- EXPORT DU KIT ---")
+
+            def prog(n, total, slot):
+                self.journal("  [%d/%d] slot %02d %s" % (n, total, slot.index,
+                                                         slot.nom[:14]))
+
+            rap = kit.exporter(self.projet, cible, True, prog)
+            ok = sum(1 for r in rap if "erreur" not in r)
+            taille = os.path.getsize(cible) / 1048576.0
+            self.journal("%d son(s) dans %s" % (ok, cible))
+            self.journal("Taille : %.1f Mo. Partageable tel quel." % taille)
+        except Exception as e:  # noqa: BLE001
+            self.journal("Export impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    def importer_kit(self, chemin):
+        if self.busy:
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_import, args=(chemin,),
+                         daemon=True).start()
+
+    def _worker_import(self, chemin):
+        try:
+            i = kit.infos(chemin)
+            self.journal("--- IMPORT : %s (%d slots) ---" % (i["nom"],
+                                                             i["slots"]))
+
+            def prog(n, total, interne):
+                if n % 5 == 0 or n == total:
+                    self.journal("  extraction %d/%d" % (n, total))
+
+            p = kit.importer(chemin, dossier_travail(), prog)
+            self._poser_projet(p)
+        except Exception as e:  # noqa: BLE001
+            self.journal("Import impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    @mainthread
+    def _poser_projet(self, p):
+        self.projet = p
+        self.selection.clear()
+        self._cache_apercu.clear()
+        if p.chemin_fichier:
+            self._memoriser(p.chemin_fichier)
+        self.rafraichir()
+        self.journal("Kit '%s' importe : %d slots, %.1f s de memoire."
+                     % (p.nom, len(p.occupes()), p.memoire_utilisee_s()))
 
     def _reprendre(self):
         """Recharge le dernier projet ouvert, s'il existe encore."""
