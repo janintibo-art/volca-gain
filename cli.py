@@ -19,7 +19,7 @@ import argparse
 import os
 import sys
 
-from volca import (__version__, audio, batch, project, reglages,
+from volca import (__version__, audio, batch, etat, project, reglages,
                    syro, tips)
 
 
@@ -146,12 +146,14 @@ def cmd_projet(a):
             print("%d sample(s) place(s)." % len(places))
         chemin = p.sauver(a.nom if a.nom.endswith(".json")
                           else a.nom + ".volca.json")
+        etat.memoriser_projet(chemin)
         print(p.resume())
         print("\nProjet enregistre : %s" % chemin)
         return 0
 
     if a.action == "voir":
         p = project.Projet.charger(a.nom)
+        etat.memoriser_projet(a.nom)
         print(p.resume())
         return 0
 

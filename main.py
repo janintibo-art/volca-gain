@@ -45,7 +45,7 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
-from volca import (__version__, audio, batch, project, reglages,
+from volca import (__version__, audio, batch, etat, project, reglages,
                    syro, tips)
 
 # ---------------------------------------------------------------- palette
@@ -742,6 +742,7 @@ class EcranEditeur(BoxLayout):
         self.apercu = None
         self.canal = "mix"
         self.override = None      # configuration issue des reglages fins
+        self.historique = []      # etats precedents, pour Annuler
 
         b = Bouton(text="Charger un WAV", size_hint_y=None, height=dp(46),
                    couleur=ORANGE)
@@ -768,7 +769,8 @@ class EcranEditeur(BoxLayout):
         r0 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         for txt, fn in (("|< tout", self._tout),
                         ("Caler zero", self._caler),
-                        ("Rogner", self._rogner)):
+                        ("Rogner", self._rogner),
+                        ("Annuler", self._annuler)):
             bb = Bouton(text=txt, font_size=dp(12))
             bb.bind(on_release=lambda w, f=fn: f())
             r0.add_widget(bb)
@@ -833,6 +835,7 @@ class EcranEditeur(BoxLayout):
             self.stop()
             self.original = audio.read_wav(chemin, canal=self.canal)
             self.chemin = chemin
+            self.historique = []
             self.onde.charger(self.original)
             i = self.original.info()
             self.lbl_nom.text = "%s  -  %.0f ms  RMS %.1f dB  LUFS %.1f" % (
@@ -849,6 +852,7 @@ class EcranEditeur(BoxLayout):
             return
         try:
             self.stop()
+            self._memoriser_etat()
             garde = (self.onde.debut, self.onde.fin)
             self.original = audio.read_wav(self.chemin, canal=canal)
             self.onde.charger(self.original)
@@ -863,6 +867,7 @@ class EcranEditeur(BoxLayout):
     def _inverser(self):
         if self.original is None:
             return
+        self._memoriser_etat()
         audio.inverser(self.original)
         self.onde.charger(self.original)
         self._maj_temps()
@@ -914,10 +919,34 @@ class EcranEditeur(BoxLayout):
         self._maj_temps()
         self.journal("Bornes calees sur les passages par zero.")
 
+    def _memoriser_etat(self):
+        """Empile l'etat courant pour pouvoir revenir en arriere."""
+        if self.original is None:
+            return
+        self.historique.append((self.original.copy(),
+                                self.onde.debut, self.onde.fin))
+        if len(self.historique) > 12:
+            self.historique.pop(0)
+
+    def _annuler(self):
+        if not self.historique:
+            self.journal("Rien a annuler.")
+            return
+        self.stop()
+        sample, d, f = self.historique.pop()
+        self.original = sample
+        self.onde.charger(self.original)
+        self.onde.debut, self.onde.fin = d, f
+        self.onde.redraw()
+        self._maj_temps()
+        self.journal("Annule. (%d etape(s) restante(s))"
+                     % len(self.historique))
+
     def _rogner(self):
         """Reduit le sample a la selection courante."""
         if self.original is None:
             return
+        self._memoriser_etat()
         a, b = self.onde.bornes_ms()
         self.original = audio.copie_decoupee(self.original, a, b)
         self.onde.charger(self.original)
@@ -1034,6 +1063,9 @@ class EcranSlots(BoxLayout):
         self.busy = False
         self.dernier_flux = None
         self._cache_apercu = {}
+        self.selection = set()
+        self.mode_selection = False
+        self._compte = None
 
         self.lbl_mem = Label(text="", size_hint_y=None, height=dp(24),
                              font_size=dp(12), color=TEXTE)
@@ -1050,13 +1082,16 @@ class EcranSlots(BoxLayout):
             b = SlotBouton(text="%02d" % i, font_size=dp(10),
                            size_hint_y=None, height=dp(42),
                            couleur=GRIS, rayon=5)
-            b.bind(on_release=lambda w, idx=i: SlotPopup(self, idx).open())
+            b.bind(on_release=lambda w, idx=i: self._toucher(idx))
             self.boutons.append(b)
             self.grille.add_widget(b)
         sv.add_widget(self.grille)
         self.add_widget(sv)
 
         r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        self.b_sel = Bouton(text="Selection", size_hint_x=0.45)
+        self.b_sel.bind(on_release=lambda *_: self._basculer_selection())
+        r0.add_widget(self.b_sel)
         b_rem = Bouton(text="Remplir depuis un dossier")
         b_rem.bind(on_release=lambda *_: Chooser(
             self._remplir, dossiers=True).open())
@@ -1108,6 +1143,7 @@ class EcranSlots(BoxLayout):
 
         self.rafraichir()
         Clock.schedule_once(lambda *_: self.maj_syro(), 0.3)
+        Clock.schedule_once(lambda *_: self._reprendre(), 0.6)
 
     def maj_syro(self):
         if syro.disponible():
@@ -1130,8 +1166,13 @@ class EcranSlots(BoxLayout):
                 marque = "*" if slot.taux else ""
                 b.text = "%02d%s\n%s" % (i, marque, slot.nom[:5])
                 b.set_apercu(self._cache_apercu.get(slot.chemin))
+                if i in self.selection:
+                    b.set_couleur(CYAN)
             b.halign = "center"
         threading.Thread(target=self._calculer_apercus, daemon=True).start()
+        if hasattr(self, "b_env"):
+            n = len(self.selection)
+            self.b_env.text = ("ENVOYER (%d)" % n) if n else "ENVOYER"
         pct = p.memoire_pct()
         self.bar.value = min(pct, 100)
         self.lbl_mem.text = "%d/%d slots - %.1f s / %.0f s (%.0f %%)%s" % (
@@ -1160,6 +1201,29 @@ class EcranSlots(BoxLayout):
             slot = self.projet.slots[i]
             if not slot.vide:
                 b.set_apercu(self._cache_apercu.get(slot.chemin))
+
+    def _toucher(self, index):
+        """Un appui : edite le slot, ou le (de)selectionne en mode selection."""
+        if not self.mode_selection:
+            SlotPopup(self, index).open()
+            return
+        if self.projet.slots[index].vide:
+            return
+        if index in self.selection:
+            self.selection.discard(index)
+        else:
+            self.selection.add(index)
+        self.rafraichir()
+
+    def _basculer_selection(self):
+        self.mode_selection = not self.mode_selection
+        if not self.mode_selection:
+            self.selection.clear()
+        self.b_sel.text = "Selection ON" if self.mode_selection else "Selection"
+        self.b_sel.set_couleur(CYAN if self.mode_selection else GRIS)
+        self.journal("Mode selection : appuie sur les slots a envoyer."
+                     if self.mode_selection else "Selection annulee.")
+        self.rafraichir()
 
     def _tasser(self):
         n = self.projet.tasser()
@@ -1211,10 +1275,33 @@ class EcranSlots(BoxLayout):
         self.journal("%d sample(s) place(s)." % len(places))
         self.rafraichir()
 
+    def _reprendre(self):
+        """Recharge le dernier projet ouvert, s'il existe encore."""
+        try:
+            chemin = etat.dernier_projet(etat.chemin_defaut(dossier_travail()))
+            if not chemin:
+                return
+            self.projet = project.Projet.charger(chemin)
+            self.rafraichir()
+            self.journal("Projet repris : %s (%d slots)"
+                         % (os.path.basename(chemin),
+                            len(self.projet.occupes())))
+        except Exception as e:  # noqa: BLE001
+            self.journal("Reprise impossible : %s" % e)
+
+    def _memoriser(self, chemin):
+        try:
+            etat.memoriser_projet(chemin,
+                                  etat.chemin_defaut(dossier_travail()))
+        except Exception:  # noqa: BLE001
+            pass
+
     def _sauver(self, *_):
         try:
-            chemin = os.path.join(dossier_travail(), "mon_kit.volca.json")
+            chemin = self.projet.chemin_fichier or os.path.join(
+                dossier_travail(), "mon_kit.volca.json")
             self.projet.sauver(chemin)
+            self._memoriser(chemin)
             self.journal("Projet enregistre : %s" % chemin)
         except Exception as e:  # noqa: BLE001
             self.journal("Erreur sauvegarde : %s" % e)
@@ -1222,6 +1309,8 @@ class EcranSlots(BoxLayout):
     def _charger(self, chemin):
         try:
             self.projet = project.Projet.charger(chemin)
+            self.selection.clear()
+            self._memoriser(chemin)
             self.journal("Projet charge : %s" % chemin)
             self.rafraichir()
         except Exception as e:  # noqa: BLE001
@@ -1271,6 +1360,9 @@ class EcranSlots(BoxLayout):
         if not self.projet.occupes():
             self.journal("Aucun slot rempli.")
             return
+        if self.selection:
+            self.journal("Envoi partiel : %d slot(s) sur %d."
+                         % (len(self.selection), len(self.projet.occupes())))
         if self.projet.depassement():
             self.journal("ATTENTION : memoire depassee.")
         self.busy = True
@@ -1282,7 +1374,8 @@ class EcranSlots(BoxLayout):
             self.journal("--- PREPARATION ---")
             d = tempfile.mkdtemp(prefix="volcagain_")
             prepares = []
-            occ = self.projet.occupes()
+            occ = [s for s in self.projet.occupes()
+                   if not self.selection or s.index in self.selection]
             for n, slot in enumerate(occ, 1):
                 s = audio.read_wav(slot.chemin)
                 s, _ = audio.process(s, slot.preset, slot.gain_db)
@@ -1298,15 +1391,49 @@ class EcranSlots(BoxLayout):
             res = syro.build_stream(prepares, cible,
                                     quality=int(self.spin_q.text))
             self.dernier_flux = res["chemin"]
+            self.duree_flux = res["duree_s"]
             self.journal("Flux pret : %.1f s" % res["duree_s"])
             self.journal("Casque vers SYNC IN, volume a fond.")
             syro.jouer(res["chemin"])
+            self._demarrer_compte(res["duree_s"])
         except syro.SyroIndisponible as e:
             self.journal("Envoi indisponible : %s" % e)
         except Exception as e:  # noqa: BLE001
             self.journal("ERREUR : %s" % e)
         finally:
             self._fin()
+
+    @mainthread
+    def _demarrer_compte(self, duree):
+        """Compte a rebours pendant la lecture du flux."""
+        self._arreter_compte()
+        self._reste = duree
+        self._total = max(duree, 0.1)
+        self.bar.max = 100
+        self._compte = Clock.schedule_interval(self._tic_compte, 0.25)
+        self.lbl_syro.text = "TRANSFERT EN COURS - ne touche a rien"
+        self.lbl_syro.color = CYAN
+
+    def _tic_compte(self, dt):
+        self._reste -= dt
+        if self._reste <= 0:
+            self._arreter_compte()
+            self.lbl_syro.text = "Transfert termine. La volca redemarre."
+            self.lbl_syro.color = (0.4, 0.9, 0.5, 1)
+            self.journal("Transfert termine.")
+            Clock.schedule_once(lambda *_: self.maj_syro(), 4)
+            self.rafraichir()
+            return False
+        fait = 100.0 * (1.0 - self._reste / self._total)
+        self.bar.value = fait
+        self.lbl_mem.text = "TRANSFERT  %2.0f %%  -  %d s restantes" % (
+            fait, int(self._reste) + 1)
+        return True
+
+    def _arreter_compte(self):
+        if self._compte is not None:
+            self._compte.cancel()
+            self._compte = None
 
     def rejouer(self):
         if not self.dernier_flux:
@@ -1315,6 +1442,7 @@ class EcranSlots(BoxLayout):
         try:
             syro.jouer(self.dernier_flux)
             self.journal("Relecture du flux...")
+            self._demarrer_compte(getattr(self, "duree_flux", 10.0))
         except Exception as e:  # noqa: BLE001
             self.journal("Lecture impossible : %s" % e)
 
