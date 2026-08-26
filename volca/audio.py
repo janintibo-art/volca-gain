@@ -627,15 +627,18 @@ def process(sample, preset="punch", extra_gain_db=0.0, overrides=None):
         normalize_peak(sample, -6.0)   # amene le signal dans la zone utile
         saturate(sample, **cfg["sat"])
 
+    # Le gain supplementaire DEPLACE LA CIBLE au lieu de s'ajouter apres.
+    # Ajoute apres coup, il etait repris par le limiteur : sur un preset
+    # qui pousse deja au plafond, monter ou baisser le gain ne changeait
+    # presque rien au niveau de sortie.
     if cfg.get("lufs") is not None:
-        target_lufs(sample, cfg["lufs"])
+        target_lufs(sample, cfg["lufs"] + extra_gain_db)
     elif cfg.get("rms") is not None:
-        target_rms(sample, cfg["rms"])
+        target_rms(sample, cfg["rms"] + extra_gain_db)
     else:
-        normalize_peak(sample, cfg["ceiling"])
-
-    if extra_gain_db:
-        apply_gain(sample, extra_gain_db)
+        # normalisation crete : on ne peut que descendre sous le plafond
+        normalize_peak(sample, min(cfg["ceiling"] + extra_gain_db,
+                                   cfg["ceiling"]))
 
     fade(sample, cfg.get("fade_in", 1.0), cfg.get("fade_out", 3.0))
     limit(sample, cfg["ceiling"])

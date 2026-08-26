@@ -390,6 +390,15 @@ class SlotPopup(Popup):
         r2.add_widget(self.sl)
         box.add_widget(r2)
 
+        r_rang = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        for txt, action in (("Deplacer", "deplacer"),
+                            ("Echanger", "echanger"),
+                            ("Copier", "dupliquer")):
+            bb = Bouton(text=txt, font_size=dp(12), couleur=BLEU)
+            bb.bind(on_release=lambda w, a=action: self._ranger(a))
+            r_rang.add_widget(bb)
+        box.add_widget(r_rang)
+
         r3 = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
         b_vider = Bouton(text="Vider")
         b_vider.bind(on_release=self._vider)
@@ -399,6 +408,39 @@ class SlotPopup(Popup):
         r3.add_widget(b_ok)
         box.add_widget(r3)
         self.add_widget(box)
+
+    def _ranger(self, action):
+        if self.ecran.projet.slots[self.index].vide:
+            self.ecran.journal("Slot %02d vide." % self.index)
+            return
+        self.dismiss()
+        ChoixSlot(self.ecran.projet,
+                  lambda dst: self._appliquer_rangement(action, dst)).open()
+
+    def _appliquer_rangement(self, action, dst):
+        p = self.ecran.projet
+        try:
+            if dst == self.index:
+                return
+            if action == "deplacer":
+                if p.slots[dst].vide:
+                    p.deplacer(self.index, dst)
+                    self.ecran.journal("Slot %02d -> %02d" % (self.index, dst))
+                else:
+                    p.echanger(self.index, dst)
+                    self.ecran.journal(
+                        "Slot %02d occupe : echange avec %02d" % (dst,
+                                                                  self.index))
+            elif action == "echanger":
+                p.echanger(self.index, dst)
+                self.ecran.journal("Slots %02d <-> %02d" % (self.index, dst))
+            else:
+                p.dupliquer(self.index, dst)
+                self.ecran.journal("Slot %02d copie vers %02d" % (self.index,
+                                                                  dst))
+            self.ecran.rafraichir()
+        except Exception as e:  # noqa: BLE001
+            self.ecran.journal("Echec : %s" % e)
 
     def _assigner(self, chemin):
         try:
@@ -832,6 +874,15 @@ class EcranSlots(BoxLayout):
         r1.add_widget(b_m)
         self.add_widget(r1)
 
+        r1b = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        b_eg = Bouton(text="Egaliser le kit", couleur=VERT)
+        b_eg.bind(on_release=lambda *_: self._egaliser())
+        r1b.add_widget(b_eg)
+        b_t = Bouton(text="Tasser")
+        b_t.bind(on_release=lambda *_: self._tasser())
+        r1b.add_widget(b_t)
+        self.add_widget(r1b)
+
         r2 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r2.add_widget(Label(text="Qualite", size_hint_x=0.35, font_size=dp(12),
                             color=TEXTE))
@@ -907,6 +958,51 @@ class EcranSlots(BoxLayout):
             slot = self.projet.slots[i]
             if not slot.vide:
                 b.set_apercu(self._cache_apercu.get(slot.chemin))
+
+    def _tasser(self):
+        n = self.projet.tasser()
+        self.journal("%d sample(s) regroupe(s) au debut." % n)
+        self.rafraichir()
+
+    def _egaliser(self):
+        if self.busy:
+            return
+        if not self.projet.occupes():
+            self.journal("Aucun slot rempli.")
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_egaliser, daemon=True).start()
+
+    def _worker_egaliser(self):
+        try:
+            self.journal("--- EGALISATION DU KIT ---")
+            self.journal("Mesure du niveau percu de chaque slot...")
+
+            def prog(n, total, slot):
+                if n % 5 == 0 or n == total:
+                    self.journal("  mesure %d/%d" % (n, total))
+
+            rap = self.projet.egaliser(progression=prog)
+            if not rap:
+                self.journal("Rien a egaliser.")
+                return
+            cible = next((r["cible"] for r in rap if "cible" in r), None)
+            if cible is not None:
+                self.journal("Cible : %.1f LUFS (le slot le plus faible)"
+                             % cible)
+            for r in rap:
+                if "erreur" in r:
+                    self.journal("  %02d %-12s ECHEC" % (r["slot"],
+                                                         r["nom"][:12]))
+                else:
+                    self.journal("  %02d %-12s %+5.1f dB -> %.1f LUFS" % (
+                        r["slot"], r["nom"][:12], r["gain_db"], r["obtenu"]))
+            self.journal("Tous les pads repondent au meme volume percu.")
+        except Exception as e:  # noqa: BLE001
+            self.journal("ERREUR : %s" % e)
+        finally:
+            self._apres_optim()
+            self.busy = False
 
     def _remplir(self, dossier):
         places = self.projet.remplir_depuis_dossier(dossier)

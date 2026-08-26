@@ -6,7 +6,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.test_audio import make_wav  # noqa: E402
-from volca import project  # noqa: E402
+from volca import audio, project  # noqa: E402
 
 
 class TestProjet(unittest.TestCase):
@@ -127,3 +127,93 @@ class TestOptimisation(unittest.TestCase):
         p.optimiser()
         p.reinitialiser_taux()
         self.assertIsNone(p.slots[0].taux)
+
+
+class TestEgalisation(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.fort = os.path.join(self.tmp, "fort.wav")
+        make_wav(self.fort, secs=0.5, amp=0.6, freq=440.0)
+        self.faible = os.path.join(self.tmp, "faible.wav")
+        make_wav(self.faible, secs=0.5, amp=0.02, freq=440.0)
+
+    def _lufs(self, slot):
+        s = audio.read_wav(slot.chemin)
+        s, _ = audio.process(s, slot.preset, slot.gain_db)
+        return audio.loudness_lufs(s)
+
+    def test_kit_homogene_apres_egalisation(self):
+        p = project.Projet("t")
+        p.assigner(0, self.fort, "max")
+        p.assigner(1, self.faible, "doux")
+        p.assigner(2, self.fort, "punch")
+        avant = [self._lufs(s) for s in p.occupes()]
+        self.assertGreater(max(avant) - min(avant), 1.0)
+        p.egaliser()
+        apres = [self._lufs(s) for s in p.occupes()]
+        self.assertLess(max(apres) - min(apres), 1.0)
+
+    def test_egaliser_natenue_que(self):
+        p = project.Projet("t")
+        p.assigner(0, self.fort, "max")
+        p.assigner(1, self.faible, "doux")
+        for r in p.egaliser():
+            self.assertLessEqual(r["gain_db"], 0.0)
+
+    def test_cible_trop_haute_ramenee(self):
+        p = project.Projet("t")
+        p.assigner(0, self.fort, "punch")
+        rap = p.egaliser(cible=0.0)
+        self.assertLess(rap[0]["cible"], 0.0)
+
+    def test_projet_vide(self):
+        self.assertEqual(project.Projet("t").egaliser(), [])
+
+    def test_deplacer(self):
+        p = project.Projet("t")
+        p.assigner(0, self.fort)
+        p.deplacer(0, 40)
+        self.assertTrue(p.slots[0].vide)
+        self.assertEqual(p.slots[40].index, 40)
+        self.assertFalse(p.slots[40].vide)
+
+    def test_deplacer_vers_occupe_refuse(self):
+        p = project.Projet("t")
+        p.assigner(0, self.fort)
+        p.assigner(1, self.faible)
+        with self.assertRaises(ValueError):
+            p.deplacer(0, 1)
+
+    def test_echanger(self):
+        p = project.Projet("t")
+        p.assigner(0, self.fort)
+        p.assigner(1, self.faible)
+        a, b = p.slots[0].nom, p.slots[1].nom
+        p.echanger(0, 1)
+        self.assertEqual(p.slots[0].nom, b)
+        self.assertEqual(p.slots[1].nom, a)
+        self.assertEqual(p.slots[0].index, 0)
+        self.assertEqual(p.slots[1].index, 1)
+
+    def test_dupliquer(self):
+        p = project.Projet("t")
+        p.assigner(0, self.fort, "max", -3.0)
+        p.dupliquer(0, 50)
+        self.assertEqual(p.slots[50].chemin, p.slots[0].chemin)
+        self.assertEqual(p.slots[50].gain_db, -3.0)
+        self.assertEqual(p.slots[50].index, 50)
+        p.slots[50].gain_db = 1.0
+        self.assertEqual(p.slots[0].gain_db, -3.0)
+
+    def test_tasser(self):
+        p = project.Projet("t")
+        p.assigner(7, self.fort)
+        p.assigner(30, self.faible)
+        self.assertEqual(p.tasser(), 2)
+        self.assertEqual([s.index for s in p.occupes()], [0, 1])
+
+    def test_rangement_hors_limites(self):
+        p = project.Projet("t")
+        p.assigner(0, self.fort)
+        with self.assertRaises(ValueError):
+            p.echanger(0, 100)

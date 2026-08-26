@@ -157,6 +157,46 @@ def cmd_projet(a):
             avant, p.memoire_utilisee_s(), gagne))
         return 0
 
+    if a.action == "egaliser":
+        p = project.Projet.charger(a.nom)
+        rap = p.egaliser(cible=a.cible)
+        if not rap:
+            print("Rien a egaliser.")
+            return 1
+        cible = next((r["cible"] for r in rap if "cible" in r), None)
+        if cible is not None:
+            print("Cible : %.1f LUFS (le slot le plus faible)" % cible)
+        for r in rap:
+            if "erreur" in r:
+                print("  %02d %-20s ECHEC %s" % (r["slot"], r["nom"][:20],
+                                                 r["erreur"]))
+            else:
+                print("  %02d %-20s %6.1f -> %+5.1f dB -> %6.1f LUFS" % (
+                    r["slot"], r["nom"][:20], r["lufs"], r["gain_db"],
+                    r["obtenu"]))
+        p.sauver()
+        print()
+        print("Tous les pads repondent au meme volume percu.")
+        return 0
+
+    if a.action in ("deplacer", "echanger", "dupliquer"):
+        if a.slot is None or a.vers is None:
+            print("Usage : projet %s FICHIER SLOT --vers N" % a.action)
+            return 1
+        p = project.Projet.charger(a.nom)
+        getattr(p, a.action)(a.slot, a.vers)
+        p.sauver()
+        print(p.resume())
+        return 0
+
+    if a.action == "tasser":
+        p = project.Projet.charger(a.nom)
+        n = p.tasser()
+        p.sauver()
+        print("%d sample(s) regroupe(s) au debut." % n)
+        print(p.resume())
+        return 0
+
     if a.action == "vider":
         p = project.Projet.charger(a.nom)
         for i in _parse_slots(str(a.slot)):
@@ -319,13 +359,18 @@ def build_parser():
 
     p = sub.add_parser("projet", help="gerer les 100 slots")
     p.add_argument("action",
-                   choices=["creer", "voir", "ajouter", "vider", "optimiser"])
+                   choices=["creer", "voir", "ajouter", "vider", "optimiser",
+                            "egaliser", "deplacer", "echanger", "dupliquer",
+                            "tasser"])
     p.add_argument("nom")
     p.add_argument("slot", nargs="?", type=int)
     p.add_argument("wav", nargs="?")
     p.add_argument("--dossier")
     p.add_argument("--depart", type=int, default=0)
     p.add_argument("--modele", default="sample", choices=["sample", "sample2"])
+    p.add_argument("--vers", type=int, help="slot destination")
+    p.add_argument("--cible", type=float,
+                   help="LUFS vise pour l'egalisation (defaut: automatique)")
     p.add_argument("-p", "--preset", default="punch",
                    choices=sorted(audio.PRESETS))
     p.add_argument("-g", "--gain", type=float, default=0.0)

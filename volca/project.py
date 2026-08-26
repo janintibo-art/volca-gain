@@ -137,6 +137,119 @@ class Projet:
                 progression(n, len(occ), slot)
         return rapport, round(gagne, 2)
 
+    def egaliser(self, cible=None, limite_db=12.0, tolerance=0.3,
+                 passes=4, progression=None):
+        """Aligne le niveau percu de tous les slots.
+
+        Chaque preset vise deja un niveau, mais max et doux ne visent pas
+        le meme : dans un kit mixte, certains pads ressortent plus fort.
+
+        Deux precautions :
+
+        1. On ALIGNE SUR LE PLUS FAIBLE. Un sample deja au plafond ne peut
+           pas devenir plus fort ; en attenuant, la correction est toujours
+           realisable.
+
+        2. On ITERE. Le limiteur rend la reponse au gain non lineaire : on
+           mesure le resultat reel, on corrige, on recommence jusqu'a la
+           tolerance demandee.
+        """
+        occ = self.occupes()
+        mesures = {}
+        for n, slot in enumerate(occ, 1):
+            try:
+                s = audio.read_wav(slot.chemin)
+                s, _ = audio.process(s, slot.preset, 0.0)
+                mesures[slot.index] = audio.loudness_lufs(s)
+            except Exception as e:  # noqa: BLE001
+                mesures[slot.index] = None
+                slot._erreur = str(e)
+            if progression:
+                progression(n, len(occ), slot)
+
+        valides = [v for v in mesures.values() if v is not None]
+        if not valides:
+            return []
+
+        plus_faible = min(valides)
+        if cible is None or cible > plus_faible:
+            cible = plus_faible
+
+        rapport = []
+        for slot in occ:
+            m = mesures[slot.index]
+            if m is None:
+                rapport.append({"slot": slot.index, "nom": slot.nom,
+                                "erreur": getattr(slot, "_erreur", "lecture")})
+                continue
+            avant = slot.gain_db
+            gain = max(-limite_db, min(0.0, cible - m))
+            reel = m
+            for _ in range(passes):
+                try:
+                    s = audio.read_wav(slot.chemin)
+                    s, _ = audio.process(s, slot.preset, gain)
+                    reel = audio.loudness_lufs(s)
+                except Exception:  # noqa: BLE001
+                    break
+                ecart = cible - reel
+                if abs(ecart) <= tolerance:
+                    break
+                gain = max(-limite_db, min(0.0, gain + ecart))
+            slot.gain_db = round(gain, 1)
+            rapport.append({"slot": slot.index, "nom": slot.nom,
+                            "lufs": round(m, 1), "avant_db": avant,
+                            "gain_db": slot.gain_db,
+                            "obtenu": round(reel, 1),
+                            "cible": round(cible, 1)})
+        return rapport
+
+    # ------------------------------------------------------------ rangement
+    def deplacer(self, src, dst):
+        """Deplace un slot vers un emplacement vide."""
+        self._verifier(src, dst)
+        if not self.slots[dst].vide:
+            raise ValueError("le slot %d n'est pas vide" % dst)
+        s = self.slots[src]
+        s.index = dst
+        self.slots[dst] = s
+        self.slots[src] = Slot(src)
+        return s
+
+    def echanger(self, a, b):
+        """Intervertit deux slots."""
+        self._verifier(a, b)
+        sa, sb = self.slots[a], self.slots[b]
+        sa.index, sb.index = b, a
+        self.slots[a], self.slots[b] = sb, sa
+        return sa, sb
+
+    def dupliquer(self, src, dst):
+        """Copie un slot vers un autre emplacement."""
+        self._verifier(src, dst)
+        s = self.slots[src]
+        if s.vide:
+            raise ValueError("le slot %d est vide" % src)
+        copie = Slot.from_dict(s.to_dict())
+        copie.index = dst
+        self.slots[dst] = copie
+        return copie
+
+    def tasser(self):
+        """Regroupe tous les samples au debut, sans trou."""
+        occupes = [s for s in self.slots if not s.vide]
+        self.slots = [Slot(i) for i in range(NB_SLOTS)]
+        for i, s in enumerate(occupes):
+            s.index = i
+            self.slots[i] = s
+        return len(occupes)
+
+    @staticmethod
+    def _verifier(*indices):
+        for i in indices:
+            if not 0 <= i < NB_SLOTS:
+                raise ValueError("slot hors limites : %d" % i)
+
     def reinitialiser_taux(self):
         for s in self.occupes():
             s.taux = None
