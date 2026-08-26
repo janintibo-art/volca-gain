@@ -12,7 +12,7 @@ a = Analysis(
     pathex=[os.path.abspath('.')],
     binaries=[],
     datas=[('../native/syro.dll', '.')] if os.path.isfile('native/syro.dll') else [],
-    hiddenimports=['volca', 'volca.audio', 'volca.batch', 'volca.project', 'volca.syro'],
+    hiddenimports=['volca', 'volca.audio', 'volca.batch', 'volca.project', 'volca.syro', 'volca.tips'],
     hookspath=[],
     runtime_hooks=[],
     excludes=['numpy', 'scipy', 'matplotlib', 'tkinter'],
@@ -31,6 +31,6 @@ exe = EXE(
     name='VolcaGain',
     debug=False,
     strip=False,
-    upx=True,
+    upx=False,   # upx ralentit fortement le build pour peu de gain
     console=False,
 )

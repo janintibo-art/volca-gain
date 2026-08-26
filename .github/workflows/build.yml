@@ -102,8 +102,18 @@ jobs:
             echo "SDK Korg absent, envoi direct desactive dans ce build"
           fi
       - name: Build exe
+        env:
+          KIVY_WINDOW: mock
+          KIVY_GL_BACKEND: mock
+          KIVY_AUDIO: mock
+          KIVY_NO_ARGS: 1
+          KIVY_NO_CONSOLELOG: 1
         run: pyinstaller packaging/volca_gain.spec --noconfirm
       - name: Console seule (secours, sans Kivy)
+        env:
+          KIVY_WINDOW: mock
+          KIVY_GL_BACKEND: mock
+          KIVY_AUDIO: mock
         run: pyinstaller --onefile --name volca-gain-console cli.py --noconfirm
       - name: Joindre la DLL
         shell: bash
