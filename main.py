@@ -186,6 +186,35 @@ RACCOURCIS_ANDROID = [
 ]
 
 
+_LECTEUR = {"son": None}
+
+
+def arreter_lecture():
+    son = _LECTEUR.get("son")
+    if son is not None:
+        try:
+            son.stop()
+            son.unload()
+        except Exception:  # noqa: BLE001
+            pass
+        _LECTEUR["son"] = None
+
+
+def jouer_sample(sample, nom="apercu"):
+    """Ecrit le son dans un fichier temporaire et le joue."""
+    arreter_lecture()
+    chemin = os.path.join(TMP, "%s.wav" % nom)
+    audio.write_wav(chemin, sample)
+    from kivy.core.audio import SoundLoader
+    son = SoundLoader.load(chemin)
+    if son is None:
+        raise RuntimeError("lecteur audio indisponible")
+    son.volume = 1.0
+    son.play()
+    _LECTEUR["son"] = son
+    return son
+
+
 def dossier_sortie(source):
     """Ou ecrire les fichiers traites.
 
@@ -1054,6 +1083,18 @@ class EcranTraitement(BoxLayout):
         row2.add_widget(self.sl)
         self.add_widget(row2)
 
+        row_ec = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        b_o = Bouton(text="Ecouter original", font_size=dp(12))
+        b_o.bind(on_release=lambda *_: self.ecouter(False))
+        row_ec.add_widget(b_o)
+        b_t = Bouton(text="Ecouter traite", font_size=dp(12), couleur=VERT)
+        b_t.bind(on_release=lambda *_: self.ecouter(True))
+        row_ec.add_widget(b_t)
+        b_s = Bouton(text="Stop", font_size=dp(12), size_hint_x=0.4)
+        b_s.bind(on_release=lambda *_: arreter_lecture())
+        row_ec.add_widget(b_s)
+        self.add_widget(row_ec)
+
         row3 = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(6))
         self.b_ana = Bouton(text="Analyser", couleur=CYAN)
         self.b_ana.bind(on_release=lambda *_: self.lancer(True))
@@ -1066,6 +1107,39 @@ class EcranTraitement(BoxLayout):
         self.pb = ProgressBar(max=1, value=0, size_hint_y=None, height=dp(14))
         self.add_widget(self.pb)
         self.add_widget(BoxLayout())
+
+    def ecouter(self, traite):
+        """Fait entendre le premier WAV du dossier, brut ou traite."""
+        if not self.src:
+            self.journal("Choisis d'abord un dossier.")
+            return
+        fichiers = batch.list_wavs(self.src)
+        if not fichiers:
+            self.journal("Aucun WAV dans ce dossier.")
+            return
+        threading.Thread(target=self._worker_ecoute,
+                         args=(fichiers[0], traite), daemon=True).start()
+
+    def _worker_ecoute(self, chemin, traite):
+        try:
+            s = audio.read_wav(chemin)
+            if traite:
+                s, _ = audio.process(s, self.spin.text, self.sl.value)
+            i = s.info()
+            self.journal("%s %s : RMS %.1f dB, LUFS %.1f" % (
+                "traite " if traite else "original",
+                os.path.basename(chemin)[:18], i["rms_db"],
+                audio.loudness_lufs(s)))
+            self._lire(s, "trait")
+        except Exception as e:  # noqa: BLE001
+            self.journal("Ecoute impossible : %s" % e)
+
+    @mainthread
+    def _lire(self, sample, nom):
+        try:
+            jouer_sample(sample, nom)
+        except Exception as e:  # noqa: BLE001
+            self.journal("Lecture impossible : %s" % e)
 
     def _set_src(self, chemin):
         self.src = chemin
@@ -1161,27 +1235,37 @@ class EcranEditeur(BoxLayout):
         self.override = None      # configuration issue des reglages fins
         self.historique = []      # etats precedents, pour Annuler
 
+        # Page defilante : l'onde peut ainsi etre grande sans que les
+        # commandes du bas disparaissent.
+        page = ScrollView(do_scroll_x=False)
+        corps = BoxLayout(orientation="vertical", spacing=dp(6),
+                          size_hint_y=None, padding=(0, 0, 0, dp(6)))
+        corps.bind(minimum_height=corps.setter("height"))
+        page.add_widget(corps)
+        BoxLayout.add_widget(self, page)
+        self.corps = corps
+
         b = Bouton(text="Charger un WAV", size_hint_y=None, height=dp(46),
                    couleur=ORANGE)
         b.bind(on_release=lambda *_: Chooser(
             self._charger, filtres=["*.wav", "*.WAV"]).open())
-        self.add_widget(b)
+        corps.add_widget(b)
 
         self.lbl_nom = Label(text="(aucun fichier)", size_hint_y=None,
                              height=dp(24), font_size=dp(12), shorten=True,
                              color=TEXTE_2)
-        self.add_widget(self.lbl_nom)
+        corps.add_widget(self.lbl_nom)
 
-        cadre = Panneau(orientation="vertical", size_hint_y=1,
-                        padding=dp(6))
+        cadre = Panneau(orientation="vertical", size_hint_y=None,
+                        height=dp(230), padding=dp(6))
         self.onde = Onde(on_change=self._maj_temps)
         cadre.add_widget(self.onde)
-        self.add_widget(cadre)
+        corps.add_widget(cadre)
 
         self.lbl_temps = Label(
             text="debut 0:00.000   fin 0:00.000   duree 0 ms",
             size_hint_y=None, height=dp(26), font_size=dp(12), color=TEXTE)
-        self.add_widget(self.lbl_temps)
+        corps.add_widget(self.lbl_temps)
 
         r0 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         for txt, fn in (("|< tout", self._tout),
@@ -1191,7 +1275,7 @@ class EcranEditeur(BoxLayout):
             bb = Bouton(text=txt, font_size=dp(12))
             bb.bind(on_release=lambda w, f=fn: f())
             r0.add_widget(bb)
-        self.add_widget(r0)
+        corps.add_widget(r0)
 
         rc = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         rc.add_widget(Label(text="Canal", size_hint_x=0.25, color=TEXTE,
@@ -1202,7 +1286,7 @@ class EcranEditeur(BoxLayout):
         self.b_inv = Bouton(text="Inverser", font_size=dp(12), size_hint_x=0.5)
         self.b_inv.bind(on_release=lambda *_: self._inverser())
         rc.add_widget(self.b_inv)
-        self.add_widget(rc)
+        corps.add_widget(rc)
 
         r1 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         r1.add_widget(Label(text="Preset", size_hint_x=0.25, color=TEXTE))
@@ -1213,7 +1297,7 @@ class EcranEditeur(BoxLayout):
                        couleur=CYAN)
         b_fin.bind(on_release=lambda *_: self._reglages_fins())
         r1.add_widget(b_fin)
-        self.add_widget(r1)
+        corps.add_widget(r1)
 
         r2 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         self.lbl_gain = Label(text="Gain +0.0 dB", size_hint_x=0.4,
@@ -1223,19 +1307,19 @@ class EcranEditeur(BoxLayout):
         self.sl.bind(value=lambda _i, v: setattr(
             self.lbl_gain, "text", "Gain %+.1f dB" % v))
         r2.add_widget(self.sl)
-        self.add_widget(r2)
+        corps.add_widget(r2)
 
         r3 = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(6))
-        self.b_a = Bouton(text="A  original", couleur=CYAN)
+        self.b_a = Bouton(text="> A original", couleur=CYAN)
         self.b_a.bind(on_release=lambda *_: self.jouer(False))
         r3.add_widget(self.b_a)
-        self.b_b = Bouton(text="B  traite", couleur=VERT)
+        self.b_b = Bouton(text="> B traite", couleur=VERT)
         self.b_b.bind(on_release=lambda *_: self.jouer(True))
         r3.add_widget(self.b_b)
         self.b_stop = Bouton(text="Stop", size_hint_x=0.5)
         self.b_stop.bind(on_release=lambda *_: self.stop())
         r3.add_widget(self.b_stop)
-        self.add_widget(r3)
+        corps.add_widget(r3)
 
         r4 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         b_slot = Bouton(text="Vers un slot", couleur=ORANGE)
@@ -1244,7 +1328,7 @@ class EcranEditeur(BoxLayout):
         b_exp = Bouton(text="Exporter WAV")
         b_exp.bind(on_release=lambda *_: self.exporter())
         r4.add_widget(b_exp)
-        self.add_widget(r4)
+        corps.add_widget(r4)
 
     # ------------------------------------------------------------ chargement
     def _charger(self, chemin):
@@ -2059,12 +2143,15 @@ class EcranPattern(BoxLayout):
         self.partie = 1
         self.busy = False
 
-        self.page = ScrollView(do_scroll_x=False)
-        self.contenu = BoxLayout(orientation="vertical", spacing=dp(6),
-                                 size_hint_y=None, padding=(0, 0, 0, dp(6)))
-        self.contenu.bind(minimum_height=self.contenu.setter("height"))
-        self.page.add_widget(self.contenu)
-        self.add_widget(self.page)
+        # Un seul conteneur defilant : la grille de pas garde une hauteur
+        # confortable sans pousser les commandes hors de l'ecran.
+        page = ScrollView(do_scroll_x=False)
+        corps = BoxLayout(orientation="vertical", spacing=dp(6),
+                          size_hint_y=None, padding=(0, 0, 0, dp(6)))
+        corps.bind(minimum_height=corps.setter("height"))
+        page.add_widget(corps)
+        BoxLayout.add_widget(self, page)
+        self.corps = corps
 
         r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r0.add_widget(Label(text="Partie", size_hint_x=0.3, color=TEXTE,
@@ -2125,6 +2212,21 @@ class EcranPattern(BoxLayout):
             b.bind(on_release=lambda w, f=fn: f())
             r4.add_widget(b)
         self.contenu.add_widget(r4)
+
+        r_ec = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        r_ec.add_widget(Label(text="Tempo", size_hint_x=0.24, color=TEXTE,
+                              font_size=dp(12)))
+        self.spin_bpm = Choix(text="120", size_hint_x=0.3,
+                              values=["90", "100", "110", "120", "130", "140",
+                                      "150", "160", "170", "174", "180"])
+        r_ec.add_widget(self.spin_bpm)
+        b_play = Bouton(text="> Ecouter", couleur=VERT)
+        b_play.bind(on_release=lambda *_: self.ecouter())
+        r_ec.add_widget(b_play)
+        b_stop = Bouton(text="Stop", size_hint_x=0.35)
+        b_stop.bind(on_release=lambda *_: arreter_lecture())
+        r_ec.add_widget(b_stop)
+        corps.add_widget(r_ec)
 
         r5 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         b_o = Bouton(text="Ouvrir", couleur=CYAN)
@@ -2271,6 +2373,61 @@ class EcranPattern(BoxLayout):
         except Exception as e:  # noqa: BLE001
             self.journal("Enregistrement impossible : %s" % e)
 
+    # ------------------------------------------------------------ ecoute
+    def ecouter(self):
+        """Joue le pattern avec les sons places dans les slots."""
+        if self.busy:
+            return
+        if not self.motif.parties_utilisees():
+            self.journal("Pattern vide : rien a ecouter.")
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_ecoute, daemon=True).start()
+
+    def _worker_ecoute(self):
+        try:
+            projet = self.get_slots().projet
+            besoins = {p.sample_num for p in self.motif.parties_utilisees()
+                       if not p.actif("mute")}
+            sons, manquants = {}, []
+            for num in sorted(besoins):
+                slot = projet.slots[num] if num < projet.nb_slots else None
+                if slot is None or slot.vide:
+                    manquants.append(num)
+                    continue
+                try:
+                    s = audio.read_wav(slot.chemin)
+                    s, _ = audio.process(s, slot.preset, slot.gain_db)
+                    sons[num] = s
+                except Exception:  # noqa: BLE001
+                    manquants.append(num)
+
+            if not sons:
+                self.journal("Aucun son disponible pour ce pattern.")
+                self.journal("Remplis d'abord les slots utilises : %s"
+                             % ", ".join(str(n) for n in sorted(besoins)))
+                return
+            if manquants:
+                self.journal("Slots vides, ignores : %s"
+                             % ", ".join(str(n) for n in manquants))
+
+            bpm = float(self.spin_bpm.text)
+            rendu = pattern.rendu(self.motif, sons, bpm)
+            self.journal("Ecoute a %.0f bpm (%.1f s, %d son(s))"
+                         % (bpm, rendu.duration_ms / 1000.0, len(sons)))
+            self._lire(rendu)
+        except Exception as e:  # noqa: BLE001
+            self.journal("Ecoute impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    @mainthread
+    def _lire(self, sample):
+        try:
+            jouer_sample(sample, "pattern")
+        except Exception as e:  # noqa: BLE001
+            self.journal("Lecture impossible : %s" % e)
+
     # ------------------------------------------------------------ envoi
     def envoyer(self):
         if self.busy:
@@ -2410,7 +2567,7 @@ class Root(BoxLayout):
         self.log.text += txt + "\n"
 
     def afficher(self, i):
-        # arreter la lecture en quittant l'editeur
+        arreter_lecture()
         for e in self.ecrans:
             if isinstance(e, EcranEditeur):
                 e.stop()

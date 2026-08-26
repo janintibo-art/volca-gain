@@ -189,3 +189,68 @@ class TestConfort(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRendu(unittest.TestCase):
+    """Ecoute d'un pattern : melange des sons aux bons instants."""
+
+    def setUp(self):
+        import math
+        sys.path.insert(0, os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        from volca import audio
+        self.audio = audio
+        n = int(44100 * 0.1)
+        self.sons = {
+            3: audio.Sample([0.5 * math.sin(i / 30.0) for i in range(n)],
+                            44100),
+            7: audio.Sample([0.3 * math.sin(i / 8.0) for i in range(n)],
+                            44100),
+        }
+        self.m = pattern.vierge("essai")
+        self.m.partie(1).sample_num = 3
+        self.m.partie(1).depuis_liste([1, 5, 9, 13])
+
+    def test_duree_selon_le_tempo(self):
+        a = pattern.rendu(self.m, self.sons, 120)
+        b = pattern.rendu(self.m, self.sons, 240)
+        self.assertGreater(a.duration_ms, b.duration_ms)
+        # 16 pas de double croche a 120 bpm = 2 s, plus la queue du son
+        self.assertGreater(a.duration_ms, 2000)
+        self.assertLess(a.duration_ms, 2300)
+
+    def test_pattern_vide_est_silencieux(self):
+        r = pattern.rendu(pattern.vierge(), self.sons)
+        self.assertEqual(r.peak(), 0.0)
+
+    def test_partie_muette_ignoree(self):
+        avec = pattern.rendu(self.m, self.sons, 120).rms_db()
+        self.m.partie(1).mettre("mute")
+        sans = pattern.rendu(self.m, self.sons, 120)
+        self.assertEqual(sans.peak(), 0.0)
+        self.assertGreater(avec, -100)
+
+    def test_sample_absent_ignore(self):
+        self.m.partie(2).sample_num = 99
+        self.m.partie(2).depuis_liste([3])
+        r = pattern.rendu(self.m, self.sons, 120)
+        self.assertGreater(r.peak(), 0.0)
+
+    def test_pas_de_saturation(self):
+        for i in range(1, 6):
+            self.m.partie(i).sample_num = 3
+            self.m.partie(i).depuis_liste(list(range(1, 17)))
+        r = pattern.rendu(self.m, self.sons, 120)
+        self.assertLessEqual(r.peak_db(), 0.0)
+
+    def test_niveau_pris_en_compte(self):
+        fort = pattern.rendu(self.m, self.sons, 120).rms_db()
+        self.m.partie(1).level = 20
+        faible = pattern.rendu(self.m, self.sons, 120)
+        self.assertGreater(fort, -100)
+        self.assertGreater(faible.peak(), 0.0)
+
+    def test_reverse(self):
+        self.m.partie(1).mettre("reverse")
+        r = pattern.rendu(self.m, self.sons, 120)
+        self.assertGreater(r.peak(), 0.0)
