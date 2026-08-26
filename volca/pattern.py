@@ -255,29 +255,13 @@ class Motif:
 
 
 # --------------------------------------------------------------------------
-def rendu(motif, sons, bpm=120.0, rate=None):
-    """Fabrique l'audio d'un pattern, pour l'ecouter avant de l'envoyer.
+def poser(melange, motif, sons, rate, par_pas, offset_pas=0):
+    """Mele un pattern dans un tampon deja alloue, a partir d'un pas donne.
 
-    motif : le Motif a jouer
-    sons  : {numero_de_sample: audio.Sample} - les sons disponibles
-    bpm   : tempo. Un pas vaut une double croche, soit 15/bpm secondes.
-
-    Les parties muettes sont ignorees, comme sur la machine. Le melange
-    est ensuite ramene sous le plafond pour ne pas saturer.
+    Sert a la fois pour l'ecoute d'un pattern seul et pour l'enchainement
+    d'un morceau entier : les queues de sons debordent naturellement sur
+    la suite, comme sur la machine.
     """
-    rate = rate or audio.TARGET_RATE
-    par_pas = 15.0 / max(bpm, 1.0)
-    total = int(rate * par_pas * NB_PAS)
-    if total <= 0:
-        return audio.Sample([], rate, motif.nom)
-
-    queue = 0
-    for p in motif.parties_utilisees():
-        s = sons.get(p.sample_num)
-        if s:
-            queue = max(queue, len(s.data))
-    melange = [0.0] * (total + queue)
-
     for p in motif.parties_utilisees():
         if p.actif("mute"):
             continue
@@ -289,12 +273,42 @@ def rendu(motif, sons, bpm=120.0, rate=None):
         for i in range(NB_PAS):
             if not p.pas_actif(i):
                 continue
-            d = int(i * par_pas * rate)
+            d = int((offset_pas + i) * par_pas * rate)
             for j, v in enumerate(data):
                 k = d + j
                 if k >= len(melange):
                     break
                 melange[k] += v * niveau
+    return melange
+
+
+def duree_pas(bpm):
+    """Duree d'un pas, une double croche, en secondes."""
+    return 15.0 / max(bpm, 1.0)
+
+
+def queue_max(sons):
+    return max((len(s.data) for s in sons.values() if s), default=0)
+
+
+def rendu(motif, sons, bpm=120.0, rate=None):
+    """Fabrique l'audio d'un pattern, pour l'ecouter avant de l'envoyer.
+
+    motif : le Motif a jouer
+    sons  : {numero_de_sample: audio.Sample} - les sons disponibles
+    bpm   : tempo. Un pas vaut une double croche.
+
+    Les parties muettes sont ignorees, comme sur la machine. Le melange
+    est ensuite ramene sous le plafond pour ne pas saturer.
+    """
+    rate = rate or audio.TARGET_RATE
+    par_pas = duree_pas(bpm)
+    total = int(rate * par_pas * NB_PAS)
+    if total <= 0:
+        return audio.Sample([], rate, motif.nom)
+
+    melange = [0.0] * (total + queue_max(sons))
+    poser(melange, motif, sons, rate, par_pas, 0)
 
     out = audio.Sample(melange, rate, motif.nom)
     crete = out.peak()

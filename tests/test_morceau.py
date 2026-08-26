@@ -1,0 +1,152 @@
+import math
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from volca import audio, morceau, pattern  # noqa: E402
+
+
+def son(freq=440.0, secs=0.1):
+    n = int(44100 * secs)
+    return audio.Sample([0.4 * math.sin(2 * math.pi * freq * i / 44100)
+                         for i in range(n)], 44100)
+
+
+def motif(nom, parties):
+    m = pattern.vierge(nom)
+    for i, (num, pas) in enumerate(parties, 1):
+        m.partie(i).sample_num = num
+        m.partie(i).depuis_liste(pas)
+    return m
+
+
+class TestSections(unittest.TestCase):
+    def setUp(self):
+        self.m = morceau.Morceau("essai", 120)
+        self.m.ajouter(motif("intro", [(3, [1, 9])]), 2)
+        self.m.ajouter(motif("couplet", [(3, [1, 5, 9, 13])]), 4)
+
+    def test_duree(self):
+        # 6 mesures de 16 pas a 120 bpm : un pas = 0,125 s
+        self.assertEqual(self.m.pas, 6 * 16)
+        self.assertAlmostEqual(self.m.duree_s(), 12.0, delta=0.1)
+
+    def test_tempo_change_la_duree(self):
+        self.m.bpm = 240
+        self.assertAlmostEqual(self.m.duree_s(), 6.0, delta=0.1)
+
+    def test_repetitions_minimum_un(self):
+        self.m.repeter(0, 0)
+        self.assertEqual(self.m.sections[0].repetitions, 1)
+
+    def test_deplacer(self):
+        self.assertTrue(self.m.deplacer(0, 1))
+        self.assertEqual(self.m.sections[0].nom, "couplet")
+
+    def test_deplacer_hors_limites(self):
+        self.assertFalse(self.m.deplacer(0, -1))
+        self.assertFalse(self.m.deplacer(1, 1))
+
+    def test_supprimer(self):
+        self.m.supprimer(0)
+        self.assertEqual(len(self.m.sections), 1)
+        self.assertEqual(self.m.sections[0].nom, "couplet")
+
+    def test_index_invalide(self):
+        with self.assertRaises(ValueError):
+            self.m.supprimer(9)
+
+    def test_dupliquer_est_independant(self):
+        self.m.dupliquer(0)
+        self.assertEqual(len(self.m.sections), 3)
+        self.m.sections[0].motif.partie(1).sample_num = 42
+        self.assertNotEqual(self.m.sections[1].motif.partie(1).sample_num, 42)
+
+    def test_samples_utilises(self):
+        self.assertEqual(self.m.samples_utilises(), [3])
+
+    def test_partie_muette_exclue(self):
+        self.m.sections[0].motif.partie(1).mettre("mute")
+        self.m.sections[1].motif.partie(1).mettre("mute")
+        self.assertEqual(self.m.samples_utilises(), [])
+
+
+class TestRenduMorceau(unittest.TestCase):
+    def setUp(self):
+        self.sons = {3: son(220), 7: son(880)}
+        self.m = morceau.Morceau("essai", 120)
+        self.m.ajouter(motif("a", [(3, [1, 5, 9, 13])]), 2)
+        self.m.ajouter(motif("b", [(7, [1, 9])]), 1)
+
+    def test_duree_du_rendu(self):
+        r = self.m.rendu(self.sons)
+        self.assertGreater(r.duration_ms, 5900)
+        self.assertLess(r.duration_ms, 6400)
+
+    def test_pas_de_saturation(self):
+        self.assertLessEqual(self.m.rendu(self.sons).peak_db(), 0.0)
+
+    def test_morceau_vide(self):
+        r = morceau.Morceau("vide").rendu(self.sons)
+        self.assertEqual(len(r.data), 0)
+
+    def test_sections_placees_dans_l_ordre(self):
+        """La seconde section commence apres la premiere."""
+        r = self.m.rendu(self.sons)
+        rate = 44100
+        debut_b = int(2 * 16 * pattern.duree_pas(120) * rate)
+        avant = max(abs(v) for v in r.data[debut_b - 2000:debut_b - 100])
+        apres = max(abs(v) for v in r.data[debut_b:debut_b + 2000])
+        self.assertGreater(apres, avant)
+
+    def test_progression(self):
+        vus = []
+        self.m.rendu(self.sons,
+                     progression=lambda n, t, nom: vus.append((n, t)))
+        self.assertEqual(vus[-1], (3, 3))
+
+
+class TestFichier(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.m = morceau.Morceau("kit", 174)
+        self.m.ajouter(motif("intro", [(5, [1, 5, 9, 13])]), 3)
+
+    def test_aller_retour(self):
+        f = self.m.sauver(os.path.join(self.tmp, "m.json"))
+        q = morceau.Morceau.charger(f)
+        self.assertEqual(q.nom, "kit")
+        self.assertEqual(q.bpm, 174)
+        self.assertEqual(len(q.sections), 1)
+        self.assertEqual(q.sections[0].repetitions, 3)
+        self.assertEqual(q.sections[0].motif.partie(1).liste_pas(),
+                         [1, 5, 9, 13])
+
+    def test_autonome(self):
+        """Le morceau contient les patterns, pas des chemins."""
+        f = self.m.sauver(os.path.join(self.tmp, "m.json"))
+        import json
+        d = json.load(open(f))
+        self.assertIn("motif", d["sections"][0])
+        self.assertNotIn("chemin", d["sections"][0])
+
+    def test_infos(self):
+        f = self.m.sauver(os.path.join(self.tmp, "m.json"))
+        i = morceau.infos(f)
+        self.assertEqual(i["sections"], 1)
+        self.assertEqual(i["samples"], [5])
+
+    def test_export_wav(self):
+        cible = os.path.join(self.tmp, "sortie.wav")
+        r = morceau.exporter_wav(self.m, {5: son(220)}, cible)
+        self.assertTrue(os.path.isfile(cible))
+        self.assertGreater(r["duree_s"], 3)
+        relu = audio.read_wav(cible)
+        self.assertGreater(len(relu.data), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

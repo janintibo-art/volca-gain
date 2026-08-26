@@ -46,7 +46,7 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
 from volca import (__version__, audio, batch, etat, kit, librarian,
-                   pattern, project, reglages, syro, tips)
+                   morceau, pattern, project, reglages, syro, tips)
 
 # ---------------------------------------------------------------- palette
 FOND = (0.055, 0.055, 0.07, 1)
@@ -899,6 +899,104 @@ class ChoixSlot(Popup):
     def _choisi(self, i):
         self.dismiss()
         self.callback(i)
+
+
+class ParamsPartie(Popup):
+    """Les 11 potards d'une partie de pattern.
+
+    Ce sont les memes reglages que sur la machine : niveau, panoramique,
+    vitesse, enveloppes, point de depart, longueur, filtre.
+    """
+
+    LIBELLES = [
+        ("level", "Niveau"), ("pan", "Panoramique"), ("speed", "Vitesse"),
+        ("ampeg_attack", "Attaque ampli"), ("ampeg_decay", "Chute ampli"),
+        ("pitcheg_int", "Hauteur intensite"),
+        ("pitcheg_attack", "Hauteur attaque"),
+        ("pitcheg_decay", "Hauteur chute"),
+        ("start_point", "Point de depart"), ("length", "Longueur"),
+        ("hicut", "Coupe-haut"),
+    ]
+
+    def __init__(self, partie, numero, on_change, **kw):
+        super().__init__(title="Partie %d : reglages" % numero,
+                         size_hint=(0.96, 0.9), **kw)
+        self.partie = partie
+        self.on_change = on_change
+        self.curseurs = {}
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        sv = ScrollView()
+        corps = BoxLayout(orientation="vertical", spacing=dp(4),
+                          size_hint_y=None)
+        corps.bind(minimum_height=corps.setter("height"))
+
+        for cle, libelle in self.LIBELLES:
+            ligne = BoxLayout(orientation="vertical", size_hint_y=None,
+                              height=dp(54))
+            lbl = Label(text="", size_hint_y=None, height=dp(20),
+                        font_size=dp(12), color=TEXTE, halign="left")
+            lbl.bind(width=lambda i, v: setattr(i, "text_size", (v, None)))
+            valeur = partie.params.get(cle, 64)
+            sl = Slider(min=0, max=127, step=1, value=valeur,
+                        size_hint_y=None, height=dp(32))
+
+            def maj(_i, v, c=cle, l=lbl, t=libelle):
+                l.text = "%s : %d" % (t, int(v))
+                self.partie.params[c] = int(v)
+
+            sl.bind(value=maj)
+            maj(None, valeur)
+            ligne.add_widget(lbl)
+            ligne.add_widget(sl)
+            corps.add_widget(ligne)
+            self.curseurs[cle] = sl
+
+        sv.add_widget(corps)
+        box.add_widget(sv)
+
+        r = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        b_r = Bouton(text="Valeurs neutres")
+        b_r.bind(on_release=self._neutre)
+        r.add_widget(b_r)
+        b_ok = Bouton(text="Fermer", couleur=VERT)
+        b_ok.bind(on_release=self._fermer)
+        r.add_widget(b_ok)
+        box.add_widget(r)
+        self.add_widget(box)
+
+    def _neutre(self, *_):
+        from volca.pattern import DEFAUTS
+        for cle, sl in self.curseurs.items():
+            sl.value = DEFAUTS.get(cle, 64)
+
+    def _fermer(self, *_):
+        self.dismiss()
+        if self.on_change:
+            self.on_change()
+
+
+class ChoixNombre(Popup):
+    """Grille de nombres, pour choisir une partie ou une section."""
+
+    def __init__(self, titre, valeurs, callback, colonnes=5, **kw):
+        super().__init__(title=titre, size_hint=(0.9, None),
+                         height=dp(280), **kw)
+        self.callback = callback
+        sv = ScrollView()
+        g = GridLayout(cols=colonnes, spacing=dp(4), size_hint_y=None,
+                       padding=dp(8))
+        g.bind(minimum_height=g.setter("height"))
+        for v in valeurs:
+            b = Bouton(text=str(v), size_hint_y=None, height=dp(46))
+            b.bind(on_release=lambda w, x=v: self._choisi(x))
+            g.add_widget(b)
+        sv.add_widget(g)
+        self.add_widget(sv)
+
+    def _choisi(self, v):
+        self.dismiss()
+        self.callback(v)
 
 
 class ChoixProgramme(Popup):
@@ -2263,6 +2361,17 @@ class EcranPattern(BoxLayout):
             cadre.add_widget(ligne)
         corps.add_widget(cadre)
 
+        r_par = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        b_par = Bouton(text="Reglages de la partie", couleur=CYAN,
+                       font_size=dp(12))
+        b_par.bind(on_release=lambda *_: ParamsPartie(
+            self._p(), self.partie, self.rafraichir).open())
+        r_par.add_widget(b_par)
+        b_copie = Bouton(text="Copier vers", size_hint_x=0.5, font_size=dp(12))
+        b_copie.bind(on_release=lambda *_: self._copier_partie())
+        r_par.add_widget(b_copie)
+        corps.add_widget(r_par)
+
         r2 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(4))
         self.b_fonc = {}
         for nom, libelle in (("loop", "Loop"), ("reverb", "Reverb"),
@@ -2384,6 +2493,23 @@ class EcranPattern(BoxLayout):
     def _changer_niveau(self, _sl, v):
         self._p().level = int(v)
         self.lbl_niveau.text = "Niveau %d" % int(v)
+
+    def _copier_partie(self):
+        """Recopie la partie courante vers une autre : pas, sample,
+        niveau, fonctions et reglages."""
+        def poser(numero):
+            src = self._p()
+            dst = self.motif.partie(numero)
+            dst.sample_num = src.sample_num
+            dst.pas = src.pas
+            dst.level = src.level
+            dst.func = src.func
+            dst.params = dict(src.params)
+            self.journal("Partie %d copiee vers %d" % (self.partie, numero))
+            self.rafraichir()
+
+        ChoixNombre("Copier la partie %d vers" % self.partie,
+                    range(1, pattern.NB_PARTIES + 1), poser).open()
 
     def _vider_partie(self):
         self._p().depuis_liste([])
@@ -2539,6 +2665,294 @@ class EcranPattern(BoxLayout):
         self.b_env.disabled = not syro.disponible()
 
 
+class EcranMorceau(BoxLayout):
+    """Enchainer des patterns pour composer un morceau.
+
+    La volca n'a pas de mode morceau : c'est une composition qui vit
+    dans l'application. On l'ecoute, on l'exporte en WAV, mais on ne
+    l'envoie pas a la machine.
+    """
+
+    def __init__(self, journal, get_slots, get_pattern, **kw):
+        super().__init__(orientation="vertical", spacing=dp(6), **kw)
+        self.journal = journal
+        self.get_slots = get_slots
+        self.get_pattern = get_pattern
+        self.morceau = morceau.Morceau("mon_morceau")
+        self.busy = False
+
+        page = ScrollView(do_scroll_x=False)
+        corps = BoxLayout(orientation="vertical", spacing=dp(6),
+                          size_hint_y=None, padding=(0, 0, 0, dp(6)))
+        corps.bind(minimum_height=corps.setter("height"))
+        page.add_widget(corps)
+        BoxLayout.add_widget(self, page)
+        self.corps = corps
+
+        self.lbl_etat = Label(text="", size_hint_y=None, height=dp(26),
+                              font_size=dp(12), color=TEXTE)
+        corps.add_widget(self.lbl_etat)
+
+        r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        r0.add_widget(Label(text="Tempo", size_hint_x=0.26, color=TEXTE,
+                            font_size=dp(12)))
+        self.spin_bpm = Choix(text="120",
+                              values=["80", "90", "100", "110", "120", "130",
+                                      "140", "150", "160", "170", "174",
+                                      "180", "190", "200"])
+        self.spin_bpm.bind(text=self._changer_bpm)
+        r0.add_widget(self.spin_bpm)
+        corps.add_widget(r0)
+
+        cadre = Panneau(orientation="vertical", size_hint_y=None,
+                        height=dp(230), padding=dp(6))
+        sv = ScrollView(do_scroll_x=False)
+        self.liste = BoxLayout(orientation="vertical", spacing=dp(3),
+                               size_hint_y=None)
+        self.liste.bind(minimum_height=self.liste.setter("height"))
+        sv.add_widget(self.liste)
+        cadre.add_widget(sv)
+        corps.add_widget(cadre)
+
+        r1 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        b_a = Bouton(text="+ Pattern courant", couleur=ORANGE,
+                     font_size=dp(12))
+        b_a.bind(on_release=lambda *_: self.ajouter_courant())
+        r1.add_widget(b_a)
+        b_f = Bouton(text="+ Depuis fichier", font_size=dp(12))
+        b_f.bind(on_release=lambda *_: Chooser(
+            self.ajouter_fichier,
+            filtres=["*.dat", "*.DAT", "*.vlcsplpatt", "*.vlcspllib"]).open())
+        r1.add_widget(b_f)
+        corps.add_widget(r1)
+
+        r2 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        self.b_play = Bouton(text="> Ecouter", couleur=VERT)
+        self.b_play.bind(on_release=lambda *_: self.ecouter())
+        r2.add_widget(self.b_play)
+        b_st = Bouton(text="Stop", size_hint_x=0.4, font_size=dp(12))
+        b_st.bind(on_release=lambda *_: arreter_lecture())
+        r2.add_widget(b_st)
+        b_ex = Bouton(text="Exporter WAV", couleur=CYAN, font_size=dp(12))
+        b_ex.bind(on_release=lambda *_: self.exporter())
+        r2.add_widget(b_ex)
+        corps.add_widget(r2)
+
+        r3 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        b_s = Bouton(text="Sauver", font_size=dp(12))
+        b_s.bind(on_release=lambda *_: NomPopup(
+            "Nom du morceau", self.morceau.nom, self.sauver).open())
+        r3.add_widget(b_s)
+        b_o = Bouton(text="Ouvrir", font_size=dp(12))
+        b_o.bind(on_release=lambda *_: Chooser(
+            self.ouvrir, filtres=["*.json"]).open())
+        r3.add_widget(b_o)
+        b_v = Bouton(text="Tout vider", font_size=dp(12))
+        b_v.bind(on_release=lambda *_: self.vider())
+        r3.add_widget(b_v)
+        corps.add_widget(r3)
+
+        self.rafraichir()
+
+    # ------------------------------------------------------------ liste
+    def rafraichir(self):
+        self.liste.clear_widgets()
+        for i, sec in enumerate(self.morceau.sections):
+            ligne = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(3))
+            ligne.add_widget(Label(
+                text="%d. %s" % (i + 1, sec.nom[:14]), size_hint_x=0.42,
+                font_size=dp(12), color=TEXTE, shorten=True))
+            b_moins = Bouton(text="-", size_hint_x=0.12, font_size=dp(16))
+            b_moins.bind(on_release=lambda w, k=i: self._repeter(k, -1))
+            ligne.add_widget(b_moins)
+            ligne.add_widget(Label(text="x%d" % sec.repetitions,
+                                   size_hint_x=0.14, font_size=dp(12),
+                                   color=ORANGE))
+            b_plus = Bouton(text="+", size_hint_x=0.12, font_size=dp(16))
+            b_plus.bind(on_release=lambda w, k=i: self._repeter(k, 1))
+            ligne.add_widget(b_plus)
+            b_up = Bouton(text="^", size_hint_x=0.12, font_size=dp(13))
+            b_up.bind(on_release=lambda w, k=i: self._deplacer(k, -1))
+            ligne.add_widget(b_up)
+            b_dn = Bouton(text="v", size_hint_x=0.12, font_size=dp(13))
+            b_dn.bind(on_release=lambda w, k=i: self._deplacer(k, 1))
+            ligne.add_widget(b_dn)
+            b_x = Bouton(text="X", size_hint_x=0.12, font_size=dp(13),
+                         couleur=ORANGE_S)
+            b_x.bind(on_release=lambda w, k=i: self._supprimer(k))
+            ligne.add_widget(b_x)
+            self.liste.add_widget(ligne)
+
+        if not self.morceau.sections:
+            self.liste.add_widget(Label(
+                text="Ajoute un pattern pour commencer.",
+                size_hint_y=None, height=dp(46), font_size=dp(12),
+                color=TEXTE_2))
+
+        m = self.morceau
+        self.lbl_etat.text = "%s : %d section(s), %d mesure(s), %.1f s" % (
+            m.nom, len(m.sections), m.pas // pattern.NB_PAS, m.duree_s())
+
+    def _changer_bpm(self, _sp, txt):
+        self.morceau.bpm = float(txt)
+        self.rafraichir()
+
+    def _repeter(self, index, delta):
+        s = self.morceau.sections[index]
+        self.morceau.repeter(index, s.repetitions + delta)
+        self.rafraichir()
+
+    def _deplacer(self, index, delta):
+        if self.morceau.deplacer(index, delta):
+            self.rafraichir()
+
+    def _supprimer(self, index):
+        s = self.morceau.supprimer(index)
+        self.journal("Section retiree : %s" % s.nom)
+        self.rafraichir()
+
+    def vider(self):
+        self.morceau.sections = []
+        self.rafraichir()
+        self.journal("Morceau vide.")
+
+    # ------------------------------------------------------------ ajout
+    def ajouter_courant(self):
+        ecran = self.get_pattern()
+        motif = ecran.motif
+        if not motif.parties_utilisees():
+            self.journal("Le pattern de l'onglet PATT. est vide.")
+            return
+        copie = pattern.Motif.from_bytes(motif.to_bytes(), motif.nom)
+        self.morceau.ajouter(copie, 1, motif.nom)
+        self.journal("Ajoute : %s" % motif.nom)
+        self.rafraichir()
+
+    def ajouter_fichier(self, chemin):
+        try:
+            if librarian.est_fichier_korg(chemin):
+                progs = [p for p in librarian.programmes(chemin)
+                         if "erreur" not in p]
+                if not progs:
+                    self.journal("Aucun pattern lisible.")
+                    return
+                if len(progs) == 1:
+                    self._poser_korg(progs[0])
+                else:
+                    ChoixProgramme(progs, self._poser_korg).open()
+                return
+            m = pattern.Motif.charger(chemin)
+            self.morceau.ajouter(m, 1, m.nom)
+            self.journal("Ajoute : %s" % m.nom)
+            self.rafraichir()
+        except Exception as e:  # noqa: BLE001
+            self.journal("Ajout impossible : %s" % e)
+
+    def _poser_korg(self, prog):
+        m = librarian.vers_motif(prog)
+        self.morceau.ajouter(m, 1, m.nom)
+        self.journal("Ajoute : %s" % m.nom)
+        self.rafraichir()
+
+    # ------------------------------------------------------------ audio
+    def _sons(self):
+        """Charge les sons des slots utilises par le morceau."""
+        projet = self.get_slots().projet
+        sons, manquants = {}, []
+        for num in self.morceau.samples_utilises():
+            slot = projet.slots[num] if num < projet.nb_slots else None
+            if slot is None or slot.vide:
+                manquants.append(num)
+                continue
+            try:
+                s = audio.read_wav(slot.chemin)
+                s, _ = audio.process(s, slot.preset, slot.gain_db)
+                sons[num] = s
+            except Exception:  # noqa: BLE001
+                manquants.append(num)
+        return sons, manquants
+
+    def ecouter(self):
+        if self.busy or not self.morceau.sections:
+            if not self.morceau.sections:
+                self.journal("Morceau vide.")
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_ecoute, daemon=True).start()
+
+    def _worker_ecoute(self):
+        try:
+            sons, manquants = self._sons()
+            if not sons:
+                self.journal("Aucun son : remplis les slots %s"
+                             % ", ".join(str(n) for n in manquants))
+                return
+            if manquants:
+                self.journal("Slots vides, ignores : %s"
+                             % ", ".join(str(n) for n in manquants))
+            self.journal("Rendu du morceau, patiente...")
+            son = self.morceau.rendu(sons)
+            self.journal("%.1f s a %.0f bpm" % (son.duration_ms / 1000.0,
+                                                self.morceau.bpm))
+            self._lire(son)
+        except Exception as e:  # noqa: BLE001
+            self.journal("Ecoute impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    @mainthread
+    def _lire(self, son):
+        try:
+            jouer_sample(son, "morceau")
+        except Exception as e:  # noqa: BLE001
+            self.journal("Lecture impossible : %s" % e)
+
+    def exporter(self):
+        if self.busy or not self.morceau.sections:
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_export, daemon=True).start()
+
+    def _worker_export(self):
+        try:
+            sons, _ = self._sons()
+            if not sons:
+                self.journal("Aucun son a exporter.")
+                return
+            cible = os.path.join(dossier_travail(),
+                                 "%s.wav" % self.morceau.nom)
+            self.journal("Export en cours...")
+            r = morceau.exporter_wav(self.morceau, sons, cible)
+            self.journal("Exporte : %.1f s" % r["duree_s"])
+            self.journal(r["chemin"])
+        except Exception as e:  # noqa: BLE001
+            self.journal("Export impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    # ------------------------------------------------------------ fichier
+    def sauver(self, nom):
+        try:
+            self.morceau.nom = nom
+            cible = os.path.join(dossier_travail(),
+                                 "%s.morceau.json" % nom)
+            self.morceau.sauver(cible)
+            self.rafraichir()
+            self.journal("Morceau enregistre : %s" % cible)
+        except Exception as e:  # noqa: BLE001
+            self.journal("Enregistrement impossible : %s" % e)
+
+    def ouvrir(self, chemin):
+        try:
+            self.morceau = morceau.Morceau.charger(chemin)
+            self.spin_bpm.text = "%d" % int(self.morceau.bpm)
+            self.rafraichir()
+            self.journal("Morceau charge : %s (%d sections)"
+                         % (self.morceau.nom, len(self.morceau.sections)))
+        except Exception as e:  # noqa: BLE001
+            self.journal("Lecture impossible : %s" % e)
+
+
 class EcranTuto(BoxLayout):
     def __init__(self, **kw):
         super().__init__(orientation="vertical", spacing=dp(6), **kw)
@@ -2569,7 +2983,7 @@ class EcranTuto(BoxLayout):
 
 # --------------------------------------------------------------------------
 class Root(BoxLayout):
-    ONGLETS = ("TRAIT.", "SLOTS", "EDIT.", "PATT.", "TUTO")
+    ONGLETS = ("TRAIT.", "SLOTS", "EDIT.", "PATT.", "MORC.", "TUTO")
 
     def __init__(self, **kw):
         super().__init__(orientation="vertical", spacing=dp(6),
@@ -2592,7 +3006,7 @@ class Root(BoxLayout):
         barre = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(4))
         self.tabs = []
         for i, nom in enumerate(self.ONGLETS):
-            b = Bouton(text=nom, font_size=dp(11), rayon=6)
+            b = Bouton(text=nom, font_size=dp(10), rayon=6)
             b.bind(on_release=lambda w, idx=i: self.afficher(idx))
             self.tabs.append(b)
             barre.add_widget(b)
@@ -2618,6 +3032,8 @@ class Root(BoxLayout):
             (None, None, None),   # SLOTS, deja construit
             ("EDIT.", EcranEditeur, (self.journal, lambda: self.ec_slots)),
             ("PATT.", EcranPattern, (self.journal, lambda: self.ec_slots)),
+            ("MORC.", EcranMorceau, (self.journal, lambda: self.ec_slots,
+                                     lambda: self.ecrans[3])),
             ("TUTO", EcranTuto, ()),
         ]
         self.ecrans = []
