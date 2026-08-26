@@ -217,3 +217,116 @@ class TestEgalisation(unittest.TestCase):
         p.assigner(0, self.fort)
         with self.assertRaises(ValueError):
             p.echanger(0, 100)
+
+
+class TestModeles(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.w = os.path.join(self.tmp, "s.wav")
+        make_wav(self.w, secs=0.3, amp=0.3)
+
+    def test_nombre_de_slots(self):
+        self.assertEqual(project.Projet("t", "sample").nb_slots, 100)
+        self.assertEqual(project.Projet("t", "sample2").nb_slots, 200)
+
+    def test_memoire_par_modele(self):
+        self.assertEqual(project.Projet("t", "sample").memoire_totale_s(), 65.0)
+        self.assertEqual(project.Projet("t", "sample2").memoire_totale_s(),
+                         130.0)
+
+    def test_slot_150_refuse_sur_sample(self):
+        p = project.Projet("t", "sample")
+        with self.assertRaises(ValueError):
+            p.assigner(150, self.w)
+
+    def test_slot_150_accepte_sur_sample2(self):
+        p = project.Projet("t", "sample2")
+        s = p.assigner(150, self.w)
+        self.assertEqual(s.index, 150)
+        self.assertEqual(len(p.occupes()), 1)
+
+    def test_agrandir_conserve_tout(self):
+        p = project.Projet("t", "sample")
+        p.assigner(0, self.w)
+        p.assigner(99, self.w)
+        perdus = p.changer_modele("sample2")
+        self.assertEqual(perdus, [])
+        self.assertEqual(p.nb_slots, 200)
+        self.assertEqual(len(p.occupes()), 2)
+
+    def test_reduire_signale_les_pertes(self):
+        p = project.Projet("t", "sample2")
+        p.assigner(5, self.w)
+        p.assigner(150, self.w)
+        annonce = p.perdus_si("sample")
+        self.assertEqual([s.index for s in annonce], [150])
+        perdus = p.changer_modele("sample")
+        self.assertEqual([s.index for s in perdus], [150])
+        self.assertEqual(p.nb_slots, 100)
+        self.assertEqual([s.index for s in p.occupes()], [5])
+
+    def test_perdus_si_ne_modifie_rien(self):
+        p = project.Projet("t", "sample2")
+        p.assigner(150, self.w)
+        p.perdus_si("sample")
+        self.assertEqual(p.nb_slots, 200)
+        self.assertEqual(len(p.occupes()), 1)
+
+    def test_modele_inconnu(self):
+        p = project.Projet("t")
+        with self.assertRaises(ValueError):
+            p.changer_modele("volca beats")
+
+    def test_sauvegarde_conserve_le_modele(self):
+        p = project.Projet("kit", "sample2")
+        p.assigner(180, self.w)
+        f = p.sauver(os.path.join(self.tmp, "k.volca.json"))
+        q = project.Projet.charger(f)
+        self.assertEqual(q.modele, "sample2")
+        self.assertEqual(q.nb_slots, 200)
+        self.assertFalse(q.slots[180].vide)
+
+    def test_chargement_ignore_les_slots_hors_limites(self):
+        """Un projet sample2 relu en sample ne doit pas planter."""
+        p = project.Projet("kit", "sample2")
+        p.assigner(150, self.w)
+        f = p.sauver(os.path.join(self.tmp, "k2.volca.json"))
+        import json
+        d = json.load(open(f))
+        d["modele"] = "sample"
+        json.dump(d, open(f, "w"))
+        q = project.Projet.charger(f)
+        self.assertEqual(q.nb_slots, 100)
+        self.assertEqual(len(q.occupes()), 0)
+
+
+class TestRenommer(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.w = os.path.join(self.tmp, "s.wav")
+        make_wav(self.w, secs=0.3, amp=0.3)
+        self.p = project.Projet("t", "sample2")
+        self.p.assigner(3, self.w)
+
+    def test_renommer(self):
+        s = self.p.renommer(3, "Kick sub 808")
+        self.assertEqual(s.nom, "Kick sub 808")
+        self.assertEqual(self.p.slots[3].nom, "Kick sub 808")
+
+    def test_nom_vide_refuse(self):
+        with self.assertRaises(ValueError):
+            self.p.renommer(3, "   ")
+
+    def test_slot_vide_refuse(self):
+        with self.assertRaises(ValueError):
+            self.p.renommer(50, "Rien")
+
+    def test_nom_tronque(self):
+        s = self.p.renommer(3, "x" * 100)
+        self.assertEqual(len(s.nom), 40)
+
+    def test_nom_survit_a_la_sauvegarde(self):
+        self.p.renommer(3, "Snare vintage")
+        f = self.p.sauver(os.path.join(self.tmp, "k.volca.json"))
+        q = project.Projet.charger(f)
+        self.assertEqual(q.slots[3].nom, "Snare vintage")

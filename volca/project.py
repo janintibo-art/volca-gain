@@ -12,12 +12,19 @@ import os
 
 from . import audio
 
-NB_SLOTS = 100
+# Caracteristiques par modele.
+#   volca sample  (2014) : 100 emplacements, environ 65 s de memoire
+#   volca sample2 (2020) : 200 emplacements, environ 130 s
+MODELES = {
+    "sample": {"slots": 100, "memoire": 65.0, "libelle": "volca sample"},
+    "sample2": {"slots": 200, "memoire": 130.0, "libelle": "volca sample2"},
+}
 
-# Memoire interne de l'instrument, en secondes de son.
-# volca sample (2014)  : environ 65 s
-# volca sample2 (2020) : environ 130 s
-MEMOIRE = {"sample": 65.0, "sample2": 130.0}
+# Plus grand nombre d'emplacements, tous modeles confondus.
+NB_SLOTS = max(m["slots"] for m in MODELES.values())
+
+# Conserve pour compatibilite avec les anciens projets.
+MEMOIRE = {k: v["memoire"] for k, v in MODELES.items()}
 
 
 class Slot:
@@ -70,18 +77,69 @@ class Slot:
 class Projet:
     def __init__(self, nom="projet", modele="sample"):
         self.nom = nom
-        self.modele = modele if modele in MEMOIRE else "sample"
-        self.slots = [Slot(i) for i in range(NB_SLOTS)]
+        self.modele = modele if modele in MODELES else "sample"
+        self.slots = [Slot(i) for i in range(self.nb_slots)]
         self.chemin_fichier = None
+
+    # ------------------------------------------------------------ modele
+    @property
+    def nb_slots(self):
+        return MODELES[self.modele]["slots"]
+
+    @property
+    def libelle_modele(self):
+        return MODELES[self.modele]["libelle"]
+
+    def changer_modele(self, modele):
+        """Change de machine cible et redimensionne la liste des slots.
+
+        Passer de sample2 a sample fait perdre les slots au-dela de 99 :
+        la methode renvoie la liste de ceux qui seraient supprimes, pour
+        pouvoir prevenir avant de valider.
+        """
+        if modele not in MODELES:
+            raise ValueError("modele inconnu : %s" % modele)
+        nouveau = MODELES[modele]["slots"]
+        perdus = [s for s in self.occupes() if s.index >= nouveau]
+        self.modele = modele
+        if nouveau > len(self.slots):
+            self.slots.extend(Slot(i) for i in range(len(self.slots), nouveau))
+        else:
+            self.slots = self.slots[:nouveau]
+        return perdus
+
+    def perdus_si(self, modele):
+        """Ce qui serait perdu en passant a ce modele, sans rien changer."""
+        if modele not in MODELES:
+            return []
+        limite = MODELES[modele]["slots"]
+        return [s for s in self.occupes() if s.index >= limite]
 
     # ------------------------------------------------------------ edition
     def assigner(self, index, chemin, preset="punch", gain_db=0.0):
-        if not 0 <= index < NB_SLOTS:
-            raise ValueError("slot hors limites : %d" % index)
+        if not 0 <= index < self.nb_slots:
+            raise ValueError("slot hors limites : %d (max %d)"
+                             % (index, self.nb_slots - 1))
         s = Slot(index, chemin, preset, gain_db)
         s.analyser()
         self.slots[index] = s
         return s
+
+    def renommer(self, index, nom):
+        """Change le nom affiche d'un slot.
+
+        Le nom est une etiquette locale : la volca ne stocke aucun nom,
+        c'est le fichier projet qui s'en souvient.
+        """
+        self._verifier(index)
+        slot = self.slots[index]
+        if slot.vide:
+            raise ValueError("le slot %d est vide" % index)
+        nom = (nom or "").strip()
+        if not nom:
+            raise ValueError("nom vide")
+        slot.nom = nom[:40]
+        return slot
 
     def vider(self, index):
         self.slots[index] = Slot(index)
@@ -93,9 +151,9 @@ class Projet:
         places = []
         i = depart
         for f in fichiers:
-            while i < NB_SLOTS and not self.slots[i].vide:
+            while i < self.nb_slots and not self.slots[i].vide:
                 i += 1
-            if i >= NB_SLOTS:
+            if i >= self.nb_slots:
                 break
             places.append(self.assigner(i, f, preset))
             i += 1
@@ -238,24 +296,24 @@ class Projet:
     def tasser(self):
         """Regroupe tous les samples au debut, sans trou."""
         occupes = [s for s in self.slots if not s.vide]
-        self.slots = [Slot(i) for i in range(NB_SLOTS)]
+        self.slots = [Slot(i) for i in range(self.nb_slots)]
         for i, s in enumerate(occupes):
             s.index = i
             self.slots[i] = s
         return len(occupes)
 
-    @staticmethod
-    def _verifier(*indices):
+    def _verifier(self, *indices):
         for i in indices:
-            if not 0 <= i < NB_SLOTS:
-                raise ValueError("slot hors limites : %d" % i)
+            if not 0 <= i < self.nb_slots:
+                raise ValueError("slot hors limites : %d (max %d)"
+                                 % (i, self.nb_slots - 1))
 
     def reinitialiser_taux(self):
         for s in self.occupes():
             s.taux = None
 
     def memoire_totale_s(self):
-        return MEMOIRE[self.modele]
+        return MODELES[self.modele]["memoire"]
 
     def memoire_pct(self):
         return 100.0 * self.memoire_utilisee_s() / self.memoire_totale_s()
@@ -265,9 +323,9 @@ class Projet:
 
     def resume(self):
         lignes = ["Projet '%s' (%s) - %d/%d slots - memoire %.1f/%.0f s (%.0f %%)"
-                  % (self.nom, self.modele, len(self.occupes()), NB_SLOTS,
-                     self.memoire_utilisee_s(), self.memoire_totale_s(),
-                     self.memoire_pct())]
+                  % (self.nom, self.libelle_modele, len(self.occupes()),
+                     self.nb_slots, self.memoire_utilisee_s(),
+                     self.memoire_totale_s(), self.memoire_pct())]
         if self.depassement():
             lignes.append("  ATTENTION : memoire depassee, raccourcis des samples")
         for s in self.occupes():
@@ -301,6 +359,8 @@ class Projet:
             data = json.load(f)
         p = Projet(data.get("nom", "projet"), data.get("modele", "sample"))
         for d in data.get("slots", []):
-            p.slots[d["index"]] = Slot.from_dict(d)
+            i = d["index"]
+            if 0 <= i < p.nb_slots:
+                p.slots[i] = Slot.from_dict(d)
         p.chemin_fichier = chemin
         return p
