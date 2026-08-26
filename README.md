@@ -1,134 +1,163 @@
 # MOC'TA BASS
 
-Une seule application pour la **Korg volca sample** : traiter le son *et*
-l'envoyer. Plus besoin du librarian Korg.
+Traitement du son **et** transfert direct pour la **Korg volca sample** et la
+**volca sample2**. Sur Android et Windows. Le librarian Korg devient inutile.
 
-## Le probleme
+---
 
-Le librarian officiel a un parametre LEVEL qui plafonne a 100 % : il ne peut
-que **baisser** le volume, jamais le monter. Un sample enregistre trop faible
-reste trop faible, et rien dans l'application ne permet de retravailler le son.
+## Le problème
 
-## Ce que fait Volca Gain
+Le librarian officiel a un paramètre LEVEL qui plafonne à 100 % : il ne peut que
+**baisser** le volume, jamais le monter. Un sample enregistré trop faible reste
+trop faible, et rien dans l'application officielle ne permet de retravailler le
+son.
 
-**Traitement du son** (ce qui manque au librarian)
+MOC'TA BASS fait le traitement **avant** le transfert, puis envoie directement
+par SYNC IN.
 
-- suppression de l'offset DC
-- coupe du silence en debut / fin
-- compression : reduit l'ecart crete / moyenne
-- mise a niveau RMS : c'est ca qui rend un son "fort" a l'oreille
-- fondus courts pour eviter les clics
-- limiteur avec lookahead : plafonne sans distordre
+Sur un kick enregistré à -32,8 dB RMS : **+27 dB** récupérés, crête maîtrisée à
+-0,2 dB, aucun écrêtage.
+
+---
+
+## Ce que ça fait
+
+### Traitement du son
+
+Une chaîne complète, réglable étage par étage :
+
+- offset DC, passe-haut, coupe des silences
+- **transient shaper** — accentue l'attaque indépendamment du volume
+- **compresseur** — réduit l'écart crête/moyenne
+- **saturation** — ajoute des harmoniques au lieu d'écrêter
+- mise à niveau **RMS ou LUFS** (pondération K)
+- **porte de bruit** — indispensable après +25 dB de gain
+- fondus courts, **limiteur avec lookahead**
 - conversion automatique en mono 16 bits 44,1 kHz
 
-Bonus : la volca compresse les samples en interne, donc un signal bien chaud
-au depart = moins de bruit de quantification.
+Six presets d'usine (`doux`, `punch`, `max`, `loop`, `sub`, `voix`), onze
+réglages fins par curseur, et des presets personnalisés enregistrables.
 
-**Gestion des slots** (comme le librarian)
+### Éditeur
 
-- les 100 slots, avec preset et gain par slot
-- jauge de memoire (65 s sur volca sample, 130 s sur sample2)
-- projets sauvegardables en JSON : on retrouve son kit, on le re-envoie,
-  on le versionne dans git
-- effacement de slots
+Forme d'onde avec poignées de découpe, calage sur les passages par zéro,
+comparaison **A/B** entre l'original et le traité, tête de lecture, annulation
+sur douze niveaux. Choix du canal source sur un stéréo (gauche, droite,
+moyenne, ou **side** qui isole ce qui n'est pas au centre).
 
-**Envoi direct** (ce qui remplace le librarian)
+### Gestion des slots
 
-- generation du flux Syro et lecture par la sortie casque
-- cable jack vers SYNC IN, et c'est parti
+100 emplacements sur volca sample, **200 sur sample2**. Preset et gain par
+slot, renommage, déplacement, échange, duplication.
 
-## Etat du projet
+- **Optimiser** — détecte les samples sans aigu et réduit leur taux
+  d'échantillonnage. Jusqu'à 64 % de mémoire libérée sur un son sombre.
+- **Égaliser le kit** — aligne le niveau perçu de tous les slots pour que les
+  pads répondent pareil. Écart ramené sous 0,3 dB.
+- **Jauge mémoire** — 65 s sur sample, 130 s sur sample2.
 
-| Element | Etat |
-|---|---|
-| Moteur audio (`volca/audio.py`) | fonctionnel, teste |
-| Traitement par lot | fonctionnel |
-| Gestion des 100 slots (`volca/project.py`) | fonctionnel, teste |
-| Interface console (`cli.py`) | fonctionnel, zero dependance |
-| Interface graphique (`main.py`) | fonctionnel (Kivy) |
-| Couche Syro (`native/` + `volca/syro.py`) | fonctionnelle, testee via faux SDK |
-| .exe Windows / APK Android | via GitHub Actions |
+### Patterns
 
-L'envoi direct a besoin du SDK Korg en sous-module (voir `native/README.md`).
-Sans lui, tout le reste fonctionne : on exporte les WAV traites et on passe
-par le librarian.
+Les 10 patterns de la machine, 10 parties × 16 pas. Numéro de sample, niveau,
+et les fonctions Loop / Reverb / Reverse / Mute par partie. Format Korg
+respecté à l'octet près : les patterns d'usine du SDK s'ouvrent tels quels.
 
-## Presets
+### Envoi direct
 
-| Nom | Usage |
-|---|---|
-| `doux` | normalisation crete seule, garde toute la dynamique |
-| `punch` | compression douce + RMS -13 dB (bon defaut) |
-| `max` | le plus fort possible : kicks, claps, one-shots |
-| `loop` | boucles : fondus minuscules pour ne pas casser le raccord |
+Génération du flux Syro et lecture par la sortie casque. Jack vers SYNC IN,
+et c'est parti. Envoi partiel possible, avec compte à rebours pendant le
+transfert.
 
-## Console
+### Kit portable
+
+Un zip contenant les sons traités **et** leur placement dans les slots. De quoi
+changer de téléphone ou partager un kit complet.
+
+---
+
+## Installation
+
+**Android** — télécharge le `.apk` depuis la page
+[Releases](../../releases/latest) et installe-le (autorise les sources
+inconnues à la première installation).
+
+**Windows** — télécharge le `.zip`, décompresse, lance `MOC'TA BASS.exe`.
+
+---
+
+## Ligne de commande
+
+Tout est aussi disponible en console, **sans aucune dépendance** :
 
 ```bash
-python cli.py info samples/                    # reperer les sons trop faibles
+python cli.py info samples/                      # repérer les sons faibles
 python cli.py traiter samples/ -o out/ -p punch
 python cli.py projet creer mon_kit --dossier out/
-python cli.py projet voir mon_kit.volca.json
+python cli.py projet egaliser mon_kit.volca.json
+python cli.py projet optimiser mon_kit.volca.json
 python cli.py envoyer mon_kit.volca.json --jouer
-python cli.py rapide 3 kick.wav --jouer        # un seul son dans le slot 3
-python cli.py effacer 3,7-9 --jouer
-python cli.py syro                             # envoi direct dispo ?
-python cli.py presets
+python cli.py pattern infos preset_pattern_01.dat
+python cli.py kit exporter mon_kit.volca.json
+python cli.py tuto
 ```
 
-Un RMS sous -20 dB = sample trop faible, c'est celui-la qu'il faut traiter.
+---
 
-## Graphique
+## Brancher la volca
+
+1. Câble jack 3,5 mm : sortie casque vers **SYNC IN**
+2. Volume **à fond**
+3. Bluetooth **coupé**, aucun égaliseur, pas de Dolby ni d'Adapt Sound
+4. Lancer et ne toucher à rien jusqu'à la fin
+
+L'envoi **écrase** le slot de destination sans confirmation.
+
+---
+
+## Construire soi-même
+
+L'envoi direct s'appuie sur le [Syro SDK de
+Korg](https://github.com/korginc/volcasample), ajouté en sous-module :
 
 ```bash
-pip install kivy
-python main.py
+git clone --recursive https://github.com/janintibo-art/volca-gain
+cd volca-gain
+cmake -S native -B native/build && cmake --build native/build
+python cli.py syro          # doit répondre DISPONIBLE
+python -m unittest discover -s . -p "test_*.py"
 ```
 
-Deux onglets : TRAITEMENT (analyse et traitement d'un dossier) et SLOTS
-(grille des 100 slots, jauge memoire, envoi).
+L'APK et le `.exe` sont construits par GitHub Actions à chaque push, et publiés
+en release à chaque tag de version.
 
-## Envoi : branchement
+Sans la bibliothèque native, tout le reste fonctionne : seul l'envoi direct est
+désactivé.
 
-1. Cable jack 3,5 mm : sortie casque -> **SYNC IN** de la volca
-2. Volume a fond
-3. Aucun egaliseur, aucune reduction de volume, pas de Bluetooth
-4. Lancer la lecture et ne toucher a rien jusqu'a la fin
+---
 
-## Builds automatiques
-
-A chaque `git push` sur `main`, GitHub Actions lance les tests puis construit
-le .exe et l'APK. Onglet **Actions** > dernier run > **Artifacts** en bas.
-
-## Arborescence
+## Architecture
 
 ```
-volca-gain/
-├── main.py                     interface graphique Kivy
-├── cli.py                      interface console (zero dependance)
-├── volca/
-│   ├── audio.py                moteur DSP
-│   ├── batch.py                traitement par lot
-│   ├── project.py              les 100 slots, fichiers projet
-│   └── syro.py                 envoi direct (ctypes)
-├── native/
-│   ├── syro_wrap.c             couche C au-dessus du SDK Korg
-│   ├── CMakeLists.txt
-│   ├── fake_sdk/               faux SDK pour les tests
-│   └── README.md               comment ajouter et compiler le SDK
-├── tests/
-├── packaging/volca_gain.spec   PyInstaller
-├── buildozer.spec              APK
-└── .github/workflows/build.yml CI
+volca/          logique métier, Python standard sans aucune dépendance
+├── audio.py    moteur DSP
+├── project.py  les 100 ou 200 slots
+├── pattern.py  format des patterns
+├── syro.py     envoi direct (ctypes)
+├── kit.py      kits portables
+└── tips.py     contenu du tutoriel
+
+native/         couche C au-dessus du SDK Korg (+ un faux SDK pour les tests)
+main.py         interface Kivy
+cli.py          interface console
+tests/          136 tests
 ```
 
-## Suite
+Le cœur ne dépend de rien : il tourne dans Termux tel quel. Kivy sert
+uniquement à l'affichage.
 
-1. Editeur par sample : trim manuel, choix du point de depart
-2. Transfert des patterns (le SDK le permet, `DataType_Pattern`)
-3. Enregistrement direct depuis le micro vers un slot
+---
 
 ## Licence
 
-MIT pour ce depot. Le SDK Syro reste soumis a la licence Korg et n'est pas
-redistribue ici.
+MIT pour ce dépôt. Le Syro SDK reste soumis à la licence Korg et n'est pas
+redistribué ici.
