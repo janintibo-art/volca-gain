@@ -19,7 +19,8 @@ import argparse
 import os
 import sys
 
-from volca import __version__, audio, batch, project, syro, tips
+from volca import (__version__, audio, batch, project, reglages,
+                   syro, tips)
 
 
 # ------------------------------------------------------------------ helpers
@@ -64,7 +65,7 @@ def cmd_info(a):
         return 1
     for p in cibles:
         try:
-            s = audio.read_wav(p)
+            s = audio.read_wav(p, canal=a.canal)
             i = s.info()
             lufs = audio.loudness_lufs(s)
             drapeau = "  <- faible" if i["rms_db"] < -20 else ""
@@ -79,9 +80,30 @@ def cmd_info(a):
     return 0
 
 
-def cmd_presets(_a):
-    for nom, cfg in audio.PRESETS.items():
-        print("%-8s %s" % (nom, cfg["desc"]))
+def cmd_presets(a):
+    if a.supprimer:
+        ok = reglages.supprimer(a.supprimer)
+        print("supprime." if ok else "preset personnalise introuvable.")
+        return 0 if ok else 1
+    print("USINE")
+    for nom in reglages.usine():
+        print("  %-10s %s" % (nom, audio.PRESETS[nom]["desc"]))
+    perso = reglages.persos()
+    if perso:
+        print()
+        print("PERSONNALISES  (%s)" % reglages.chemin_defaut())
+        for nom in perso:
+            print("  %-10s %s" % (nom, audio.PRESETS[nom].get("desc", "")))
+    if a.detail:
+        cfg = audio.PRESETS.get(a.detail)
+        if not cfg:
+            print("\npreset inconnu : %s" % a.detail)
+            return 1
+        print()
+        print("REGLAGES DE '%s'" % a.detail)
+        plat = reglages.a_plat(cfg)
+        for cle, libelle, _mi, _ma, _pas, unite in reglages.REGLAGES:
+            print("  %-22s %8.2f %s" % (libelle, plat[cle], unite))
     return 0
 
 
@@ -344,9 +366,12 @@ def build_parser():
 
     p = sub.add_parser("info", help="afficher les niveaux")
     p.add_argument("entree", nargs="+")
+    p.add_argument("--canal", default="mix", choices=list(audio.CANAUX))
     p.set_defaults(func=cmd_info)
 
     p = sub.add_parser("presets", help="lister les presets")
+    p.add_argument("-d", "--detail", help="afficher les reglages d'un preset")
+    p.add_argument("--supprimer", help="supprimer un preset personnalise")
     p.set_defaults(func=cmd_presets)
 
     p = sub.add_parser("traiter", help="traiter un fichier ou un dossier")
@@ -421,6 +446,10 @@ def build_parser():
 
 
 def main(argv=None):
+    try:
+        reglages.charger()
+    except Exception:  # noqa: BLE001
+        pass
     ap = build_parser()
     a = ap.parse_args(argv)
     if not getattr(a, "cmd", None):

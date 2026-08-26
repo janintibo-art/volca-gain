@@ -40,9 +40,11 @@ from kivy.uix.progressbar import ProgressBar
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.slider import Slider
 from kivy.uix.spinner import Spinner
+from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
-from volca import __version__, audio, batch, project, syro, tips
+from volca import (__version__, audio, batch, project, reglages,
+                   syro, tips)
 
 # ---------------------------------------------------------------- palette
 FOND = (0.055, 0.055, 0.07, 1)
@@ -296,6 +298,123 @@ class Onde(Widget):
 
 
 # --------------------------------------------------------------------------
+class NomPopup(Popup):
+    """Petite saisie de texte."""
+
+    def __init__(self, titre, defaut, callback, **kw):
+        super().__init__(title=titre, size_hint=(0.9, None), height=dp(190),
+                         **kw)
+        self.callback = callback
+        box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
+        self.champ = TextInput(text=defaut, multiline=False,
+                               size_hint_y=None, height=dp(44),
+                               font_size=dp(16))
+        box.add_widget(self.champ)
+        r = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        b_no = Bouton(text="Annuler")
+        b_no.bind(on_release=lambda *_: self.dismiss())
+        r.add_widget(b_no)
+        b_ok = Bouton(text="Valider", couleur=VERT)
+        b_ok.bind(on_release=self._ok)
+        r.add_widget(b_ok)
+        box.add_widget(r)
+        self.add_widget(box)
+
+    def _ok(self, *_):
+        txt = self.champ.text.strip()
+        self.dismiss()
+        if txt:
+            self.callback(txt)
+
+
+class ReglagesPopup(Popup):
+    """Tous les reglages de la chaine, un curseur par parametre."""
+
+    def __init__(self, base_nom, valeurs, on_apercu, on_valider, **kw):
+        super().__init__(title="Reglages fins  (base : %s)" % base_nom,
+                         size_hint=(0.96, 0.92), **kw)
+        self.base_nom = base_nom
+        self.on_apercu = on_apercu
+        self.on_valider = on_valider
+        self.curseurs = {}
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        sv = ScrollView()
+        grille = BoxLayout(orientation="vertical", spacing=dp(4),
+                           size_hint_y=None)
+        grille.bind(minimum_height=grille.setter("height"))
+
+        for cle, libelle, mini, maxi, pas, unite in reglages.REGLAGES:
+            ligne = BoxLayout(orientation="vertical", size_hint_y=None,
+                              height=dp(56))
+            lbl = Label(text="", size_hint_y=None, height=dp(22),
+                        font_size=dp(12), color=TEXTE, halign="left")
+            lbl.bind(width=lambda i, v: setattr(i, "text_size", (v, None)))
+            sl = Slider(min=mini, max=maxi, step=pas,
+                        value=max(mini, min(maxi, valeurs.get(cle, mini))),
+                        size_hint_y=None, height=dp(32))
+
+            def maj(_i, v, l=lbl, t=libelle, u=unite):
+                l.text = "%s : %.2f %s" % (t, v, u)
+
+            sl.bind(value=maj)
+            maj(None, sl.value)
+            ligne.add_widget(lbl)
+            ligne.add_widget(sl)
+            grille.add_widget(ligne)
+            self.curseurs[cle] = sl
+
+        sv.add_widget(grille)
+        box.add_widget(sv)
+
+        r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        r0.add_widget(Label(text="Niveau", size_hint_x=0.3, color=TEXTE,
+                            font_size=dp(12)))
+        self.spin_mode = Spinner(text="rms", values=["rms", "lufs"])
+        r0.add_widget(self.spin_mode)
+        box.add_widget(r0)
+
+        r1 = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        b_ec = Bouton(text="Ecouter", couleur=VERT)
+        b_ec.bind(on_release=lambda *_: self.on_apercu(self.config()))
+        r1.add_widget(b_ec)
+        b_sv = Bouton(text="Enregistrer", couleur=BLEU)
+        b_sv.bind(on_release=lambda *_: self._enregistrer())
+        r1.add_widget(b_sv)
+        b_ok = Bouton(text="Appliquer", couleur=ORANGE)
+        b_ok.bind(on_release=self._valider)
+        r1.add_widget(b_ok)
+        box.add_widget(r1)
+        self.add_widget(box)
+
+    def valeurs(self):
+        return {k: sl.value for k, sl in self.curseurs.items()}
+
+    def config(self):
+        base = audio.PRESETS[self.base_nom]
+        return reglages.depuis_plat(base, self.valeurs(), self.spin_mode.text)
+
+    def _valider(self, *_):
+        cfg = self.config()
+        self.dismiss()
+        self.on_valider(cfg)
+
+    def _enregistrer(self):
+        cfg = self.config()
+        NomPopup("Nom du preset", "mon_" + self.base_nom,
+                 lambda nom: self._faire_enregistrer(nom, cfg)).open()
+
+    def _faire_enregistrer(self, nom, cfg):
+        try:
+            cfg["desc"] = "Preset personnalise (base %s)" % self.base_nom
+            reglages.sauver(nom, cfg, reglages.chemin_defaut(
+                dossier_travail()))
+            self.dismiss()
+            self.on_valider(cfg, nom)
+        except Exception as e:  # noqa: BLE001
+            self.title = "Erreur : %s" % e
+
+
 class Chooser(Popup):
     def __init__(self, callback, dossiers=False, filtres=None, start=None, **kw):
         super().__init__(
@@ -606,6 +725,8 @@ class EcranEditeur(BoxLayout):
         self.duree_lue = 0.0
         self._ev = None
         self.apercu = None
+        self.canal = "mix"
+        self.override = None      # configuration issue des reglages fins
 
         b = Bouton(text="Charger un WAV", size_hint_y=None, height=dp(46),
                    couleur=ORANGE)
@@ -638,10 +759,26 @@ class EcranEditeur(BoxLayout):
             r0.add_widget(bb)
         self.add_widget(r0)
 
+        rc = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        rc.add_widget(Label(text="Canal", size_hint_x=0.25, color=TEXTE,
+                            font_size=dp(12)))
+        self.spin_canal = Spinner(text="mix", values=list(audio.CANAUX))
+        self.spin_canal.bind(text=self._changer_canal)
+        rc.add_widget(self.spin_canal)
+        self.b_inv = Bouton(text="Inverser", font_size=dp(12), size_hint_x=0.5)
+        self.b_inv.bind(on_release=lambda *_: self._inverser())
+        rc.add_widget(self.b_inv)
+        self.add_widget(rc)
+
         r1 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
-        r1.add_widget(Label(text="Preset", size_hint_x=0.3, color=TEXTE))
+        r1.add_widget(Label(text="Preset", size_hint_x=0.25, color=TEXTE))
         self.spin = Spinner(text="punch", values=sorted(audio.PRESETS))
+        self.spin.bind(text=lambda *_: self._oublier_override())
         r1.add_widget(self.spin)
+        b_fin = Bouton(text="Fins", font_size=dp(12), size_hint_x=0.3,
+                       couleur=BLEU)
+        b_fin.bind(on_release=lambda *_: self._reglages_fins())
+        r1.add_widget(b_fin)
         self.add_widget(r1)
 
         r2 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
@@ -679,7 +816,7 @@ class EcranEditeur(BoxLayout):
     def _charger(self, chemin):
         try:
             self.stop()
-            self.original = audio.read_wav(chemin)
+            self.original = audio.read_wav(chemin, canal=self.canal)
             self.chemin = chemin
             self.onde.charger(self.original)
             i = self.original.info()
@@ -690,6 +827,54 @@ class EcranEditeur(BoxLayout):
             self.journal("Editeur : %s charge" % os.path.basename(chemin))
         except Exception as e:  # noqa: BLE001
             self.journal("Lecture impossible : %s" % e)
+
+    def _changer_canal(self, _sp, canal):
+        self.canal = canal
+        if not self.chemin:
+            return
+        try:
+            self.stop()
+            garde = (self.onde.debut, self.onde.fin)
+            self.original = audio.read_wav(self.chemin, canal=canal)
+            self.onde.charger(self.original)
+            self.onde.debut, self.onde.fin = garde
+            self.onde.redraw()
+            self._maj_temps()
+            self.journal("Canal : %s (RMS %.1f dB)"
+                         % (canal, self.original.rms_db()))
+        except Exception as e:  # noqa: BLE001
+            self.journal("Canal impossible : %s" % e)
+
+    def _inverser(self):
+        if self.original is None:
+            return
+        audio.inverser(self.original)
+        self.onde.charger(self.original)
+        self._maj_temps()
+        self.journal("Polarite inversee.")
+
+    def _oublier_override(self):
+        if self.override is not None:
+            self.override = None
+            self.journal("Reglages fins abandonnes, retour au preset.")
+
+    def _reglages_fins(self):
+        base = self.spin.text
+        depart = self.override if self.override is not None \
+            else audio.PRESETS[base]
+        ReglagesPopup(base, reglages.a_plat(depart),
+                      lambda cfg: self.jouer(True, cfg),
+                      self._appliquer_reglages).open()
+
+    def _appliquer_reglages(self, cfg, nom=None):
+        if nom:
+            self.override = None
+            self.spin.values = sorted(audio.PRESETS)
+            self.spin.text = nom
+            self.journal("Preset '%s' enregistre et selectionne." % nom)
+        else:
+            self.override = cfg
+            self.journal("Reglages fins appliques (non enregistres).")
 
     def _maj_temps(self):
         a, b = self.onde.bornes_ms()
@@ -725,21 +910,23 @@ class EcranEditeur(BoxLayout):
         self.journal("Rogne : %.0f ms conserves." % self.original.duration_ms)
 
     # ------------------------------------------------------------ selection
-    def _selection(self, traite):
+    def _selection(self, traite, override=None):
         a, b = self.onde.bornes_ms()
         s = audio.copie_decoupee(self.original, a, b)
         if traite:
-            s, _ = audio.process(s, self.spin.text, self.sl.value)
+            cfg = override if override is not None else self.override
+            s, _ = audio.process(s, self.spin.text, self.sl.value,
+                                 overrides=cfg)
         return s
 
     # ------------------------------------------------------------ lecture
-    def jouer(self, traite):
+    def jouer(self, traite, override=None):
         if self.original is None:
             self.journal("Charge d'abord un WAV.")
             return
         self.stop()
         try:
-            s = self._selection(traite)
+            s = self._selection(traite, override)
             chemin = os.path.join(TMP, "b.wav" if traite else "a.wav")
             audio.write_wav(chemin, s)
             self.apercu = s
@@ -1210,6 +1397,12 @@ class VolcaGainApp(App):
 
     def build(self):
         Window.clearcolor = FOND
+        try:
+            perso = reglages.charger(reglages.chemin_defaut(dossier_travail()))
+            if perso:
+                print("presets personnalises charges :", list(perso))
+        except Exception:  # noqa: BLE001
+            pass
         if IS_ANDROID:
             Clock.schedule_once(lambda *_: self._permissions(), 0.5)
         return Root()

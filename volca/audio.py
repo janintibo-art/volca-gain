@@ -109,17 +109,43 @@ def _decode(raw, sampwidth, nchannels):
     raise ValueError("Profondeur non supportee : %d octets" % sampwidth)
 
 
-def _downmix(inter, nchannels):
+CANAUX = ("mix", "gauche", "droite", "side")
+
+
+def _canal(inter, nchannels, canal="mix"):
+    """Extrait un canal d'un signal entrelace.
+
+    mix    : moyenne (le defaut)
+    gauche : canal 1 seul
+    droite : canal 2 seul
+    side   : difference L-R. Isole ce qui n'est pas au centre : utile
+             pour recuperer une nappe ou une reverb sans la voix.
+    """
     if nchannels <= 1:
         return inter
-    out = []
     n = len(inter) - (len(inter) % nchannels)
-    for i in range(0, n, nchannels):
-        s = 0.0
-        for c in range(nchannels):
-            s += inter[i + c]
-        out.append(s / nchannels)
+    out = []
+    if canal == "gauche":
+        for i in range(0, n, nchannels):
+            out.append(inter[i])
+    elif canal == "droite":
+        c = 1 if nchannels > 1 else 0
+        for i in range(0, n, nchannels):
+            out.append(inter[i + c])
+    elif canal == "side" and nchannels >= 2:
+        for i in range(0, n, nchannels):
+            out.append((inter[i] - inter[i + 1]) / 2.0)
+    else:
+        for i in range(0, n, nchannels):
+            v = 0.0
+            for c in range(nchannels):
+                v += inter[i + c]
+            out.append(v / nchannels)
     return out
+
+
+def _downmix(inter, nchannels):
+    return _canal(inter, nchannels, "mix")
 
 
 def resample_linear(data, src_rate, dst_rate):
@@ -141,15 +167,18 @@ def resample_linear(data, src_rate, dst_rate):
     return out
 
 
-def read_wav(path, to_rate=TARGET_RATE):
-    """Lit un WAV PCM et renvoie un Sample mono au rate demande."""
+def read_wav(path, to_rate=TARGET_RATE, canal="mix"):
+    """Lit un WAV PCM et renvoie un Sample mono au rate demande.
+
+    canal : mix, gauche, droite ou side (voir _canal).
+    """
     with wave.open(path, "rb") as w:
         nch = w.getnchannels()
         sw = w.getsampwidth()
         rate = w.getframerate()
         raw = w.readframes(w.getnframes())
 
-    data = _downmix(_decode(raw, sw, nch), nch)
+    data = _canal(_decode(raw, sw, nch), nch, canal)
     if to_rate:
         data = resample_linear(data, rate, to_rate)
         rate = to_rate
@@ -539,6 +568,72 @@ def taux_conseille(sample, seuil_hf_db=-28.0):
 
 
 # --------------------------------------------------------------------------
+# Porte de bruit, inversion, raccord de boucle
+# --------------------------------------------------------------------------
+def porte(sample, seuil_db=-45.0, attaque_ms=2.0, maintien_ms=40.0,
+          relachement_ms=80.0, plancher_db=-60.0):
+    """Porte de bruit : coupe ce qui passe sous le seuil.
+
+    Indispensable sur les enregistrements au telephone : le souffle de
+    fond devient tres audible une fois qu'on a monte le niveau de 25 dB.
+    """
+    rate = sample.rate
+    seuil = db_to_lin(seuil_db)
+    plancher = db_to_lin(plancher_db)
+    att = math.exp(-1.0 / max(rate * attaque_ms / 1000.0, 1.0))
+    rel = math.exp(-1.0 / max(rate * relachement_ms / 1000.0, 1.0))
+    maintien = int(rate * maintien_ms / 1000.0)
+
+    env = 0.0
+    g = plancher
+    reste = 0
+    out = []
+    for x in sample.data:
+        a = abs(x)
+        env = max(a, att * env + (1.0 - att) * a)
+        if env >= seuil:
+            reste = maintien
+        elif reste > 0:
+            reste -= 1
+        cible = 1.0 if reste > 0 or env >= seuil else plancher
+        if cible > g:
+            g = cible - (cible - g) * att
+        else:
+            g = cible + (g - cible) * rel
+        out.append(x * g)
+    sample.data = out
+    return sample
+
+
+def inverser(sample):
+    """Inverse la polarite. Ne s'entend pas seul, mais change tout quand
+    deux samples se superposent sur la volca."""
+    sample.data = [-v for v in sample.data]
+    return sample
+
+
+def raccord_boucle(sample, duree_ms=15.0):
+    """Fondu enchaine de la fin sur le debut : la boucle tourne sans clic.
+
+    Le sample raccourcit de la duree du fondu, c'est normal : la queue
+    est fondue dans la tete au lieu d'etre juxtaposee.
+    """
+    d = sample.data
+    n = len(d)
+    x = int(sample.rate * duree_ms / 1000.0)
+    if x < 2 or n < 4 * x:
+        return sample
+    tete = d[:x]
+    queue = d[n - x:]
+    fondu = []
+    for i in range(x):
+        f = i / float(x - 1)
+        fondu.append(tete[i] * f + queue[i] * (1.0 - f))
+    sample.data = fondu + d[x:n - x]
+    return sample
+
+
+# --------------------------------------------------------------------------
 # Presets
 # --------------------------------------------------------------------------
 PRESETS = {
@@ -575,7 +670,8 @@ PRESETS = {
         "rms": None, "lufs": -14.0,
         "sat": {"drive": 1.2, "mix": 0.2},
         "ceiling": -0.5, "fade_in": 0.5, "fade_out": 0.5,
-        "desc": "Boucles : niveau percu -14 LUFS, fondus minuscules.",
+        "xfade": 12.0,
+        "desc": "Boucles : niveau -14 LUFS, raccord fondu sans clic.",
     },
     "sub": {
         "hp": 20.0, "trim": True, "dc": True,
@@ -593,8 +689,9 @@ PRESETS = {
                      "attack_ms": 10.0, "release_ms": 120.0},
         "rms": None, "lufs": -13.0,
         "sat": {"drive": 1.2, "mix": 0.2},
+        "porte": {"seuil_db": -42.0},
         "ceiling": -0.3, "fade_in": 2.0, "fade_out": 8.0,
-        "desc": "Voix et field recordings : coupe le souffle grave.",
+        "desc": "Voix et field : coupe le souffle grave + porte de bruit.",
     },
 }
 
@@ -616,6 +713,10 @@ def process(sample, preset="punch", extra_gain_db=0.0, overrides=None):
         highpass(sample, cfg["hp"])
     if cfg.get("trim"):
         trim_silence(sample)
+    if cfg.get("porte"):
+        porte(sample, **cfg["porte"])
+    if cfg.get("inverser"):
+        inverser(sample)
     if cfg.get("transient"):
         transient(sample, **cfg["transient"])
     if cfg.get("compress"):
@@ -640,7 +741,11 @@ def process(sample, preset="punch", extra_gain_db=0.0, overrides=None):
         normalize_peak(sample, min(cfg["ceiling"] + extra_gain_db,
                                    cfg["ceiling"]))
 
-    fade(sample, cfg.get("fade_in", 1.0), cfg.get("fade_out", 3.0))
+    if cfg.get("xfade"):
+        raccord_boucle(sample, cfg["xfade"])
+        fade(sample, 0.3, 0.3)
+    else:
+        fade(sample, cfg.get("fade_in", 1.0), cfg.get("fade_out", 3.0))
     limit(sample, cfg["ceiling"])
 
     after = sample.info()
