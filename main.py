@@ -784,6 +784,8 @@ class Chooser(Popup):
             path=start or default_dir(), dirselect=dossiers,
             filters=filtres or ["*"])
         self.chooser.bind(path=self._maj_chemin)
+        if not dossiers:
+            self.chooser.bind(selection=self._ecouter_selection)
         box.add_widget(self.chooser)
 
         # chemin saisissable : dernier recours quand rien n'est visible
@@ -800,13 +802,33 @@ class Chooser(Popup):
 
         row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
         b_no = Bouton(text="Annuler")
-        b_no.bind(on_release=lambda *_: self.dismiss())
+        b_no.bind(on_release=lambda *_: (arreter_lecture(), self.dismiss()))
         row.add_widget(b_no)
         b_ok = Bouton(text="Choisir", couleur=ORANGE)
         b_ok.bind(on_release=self._ok)
         row.add_widget(b_ok)
         box.add_widget(row)
         self.add_widget(box)
+
+    def _ecouter_selection(self, _w, selection):
+        """Fait entendre le WAV des qu'on appuie dessus : on evite ainsi
+        de se tromper de fichier."""
+        if not selection:
+            return
+        chemin = selection[0]
+        if not chemin.lower().endswith(".wav") or os.path.isdir(chemin):
+            return
+        try:
+            if os.path.getsize(chemin) > 30 * 1024 * 1024:
+                self.lbl.text = "Fichier trop gros pour l'apercu."
+                return
+            s = audio.read_wav(chemin)
+            i = s.info()
+            self.lbl.text = "%.0f ms  RMS %.1f dB" % (i["duree_ms"],
+                                                      i["rms_db"])
+            jouer_sample(s, "apercu")
+        except Exception as e:  # noqa: BLE001
+            self.lbl.text = "Apercu impossible : %s" % e
 
     def _maj_chemin(self, _w, chemin):
         self.champ.text = chemin
@@ -830,6 +852,7 @@ class Chooser(Popup):
             self.lbl.text = "Ce dossier n'existe pas ou n'est pas lisible."
 
     def _ok(self, *_):
+        arreter_lecture()
         sel = self.chooser.selection
 
         if self.dossiers:
@@ -1234,6 +1257,8 @@ class EcranEditeur(BoxLayout):
         self.canal = "mix"
         self.override = None      # configuration issue des reglages fins
         self.historique = []      # etats precedents, pour Annuler
+        self.depart_lecture = 0.0
+        self._maj_auto = False
 
         # Page defilante : l'onde peut ainsi etre grande sans que les
         # commandes du bas disparaissent.
@@ -1266,6 +1291,24 @@ class EcranEditeur(BoxLayout):
             text="debut 0:00.000   fin 0:00.000   duree 0 ms",
             size_hint_y=None, height=dp(26), font_size=dp(12), color=TEXTE)
         corps.add_widget(self.lbl_temps)
+
+        # barre de lecture : bouton et curseur de position
+        r_lec = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        self.b_lire = Bouton(text="> Lire", couleur=VERT, size_hint_x=0.32)
+        self.b_lire.bind(on_release=lambda *_: self.lire_depuis_curseur())
+        r_lec.add_widget(self.b_lire)
+        b_st = Bouton(text="Stop", size_hint_x=0.24, font_size=dp(12))
+        b_st.bind(on_release=lambda *_: self.stop())
+        r_lec.add_widget(b_st)
+        self.sl_pos = Slider(min=0.0, max=1.0, value=0.0)
+        self.sl_pos.bind(on_touch_up=self._curseur_relache)
+        self.sl_pos.bind(value=self._curseur_bouge)
+        r_lec.add_widget(self.sl_pos)
+        corps.add_widget(r_lec)
+
+        self.lbl_pos = Label(text="0:00.000", size_hint_y=None,
+                             height=dp(22), font_size=dp(11), color=TEXTE_2)
+        corps.add_widget(self.lbl_pos)
 
         r0 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         for txt, fn in (("|< tout", self._tout),
@@ -1337,6 +1380,7 @@ class EcranEditeur(BoxLayout):
             self.original = audio.read_wav(chemin, canal=self.canal)
             self.chemin = chemin
             self.historique = []
+            self.sl_pos.value = 0.0
             self.onde.charger(self.original)
             i = self.original.info()
             self.lbl_nom.text = "%s  -  %.0f ms  RMS %.1f dB  LUFS %.1f" % (
@@ -1465,13 +1509,38 @@ class EcranEditeur(BoxLayout):
         return s
 
     # ------------------------------------------------------------ lecture
-    def jouer(self, traite, override=None):
+    def _curseur_bouge(self, _sl, v):
+        """Deplace la tete de lecture sur l'onde pendant qu'on glisse."""
+        if self.original is None or getattr(self, "_maj_auto", False):
+            return
+        d, f = self.onde.debut, self.onde.fin
+        self.onde.tete = d + v * (f - d)
+        self.onde.redraw()
+        a, b = self.onde.bornes_ms()
+        self.lbl_pos.text = mmss((a + v * (b - a)) / 1000.0)
+
+    def _curseur_relache(self, sl, touch):
+        if sl.collide_point(*touch.pos) and self.son is not None:
+            self.lire_depuis_curseur()
+
+    def lire_depuis_curseur(self):
+        """Joue la selection a partir de la position du curseur."""
+        if self.original is None:
+            self.journal("Charge d'abord un WAV.")
+            return
+        self.jouer(False, depart=self.sl_pos.value)
+
+    def jouer(self, traite, override=None, depart=0.0):
         if self.original is None:
             self.journal("Charge d'abord un WAV.")
             return
         self.stop()
         try:
             s = self._selection(traite, override)
+            self.depart_lecture = max(0.0, min(0.99, depart))
+            if self.depart_lecture > 0:
+                i = int(len(s.data) * self.depart_lecture)
+                s = audio.Sample(s.data[i:], s.rate, s.name)
             chemin = os.path.join(TMP, "b.wav" if traite else "a.wav")
             audio.write_wav(chemin, s)
             self.apercu = s
@@ -1500,10 +1569,18 @@ class EcranEditeur(BoxLayout):
         if self.son.state != "play":
             self.stop()
             return False
-        frac = min(max(pos / self.duree_lue, 0.0), 1.0)
+        reste = 1.0 - getattr(self, "depart_lecture", 0.0)
+        frac = getattr(self, "depart_lecture", 0.0) + \
+            reste * min(max(pos / self.duree_lue, 0.0), 1.0)
+        frac = min(max(frac, 0.0), 1.0)
         d, f = self.onde.debut, self.onde.fin
         self.onde.tete = d + frac * (f - d)
         self.onde.redraw()
+        self._maj_auto = True
+        self.sl_pos.value = frac
+        self._maj_auto = False
+        a, b = self.onde.bornes_ms()
+        self.lbl_pos.text = mmss((a + frac * (b - a)) / 1000.0)
         return True
 
     def stop(self):
@@ -2160,7 +2237,7 @@ class EcranPattern(BoxLayout):
             text="1", values=[str(i) for i in range(1, 11)])
         self.spin_partie.bind(text=self._changer_partie)
         r0.add_widget(self.spin_partie)
-        self.contenu.add_widget(r0)
+        corps.add_widget(r0)
 
         r1 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         self.lbl_sample = Label(text="Sample 0", size_hint_x=0.45,
@@ -2169,7 +2246,7 @@ class EcranPattern(BoxLayout):
         self.sl_sample = Slider(min=0, max=199, value=0, step=1)
         self.sl_sample.bind(value=self._changer_sample)
         r1.add_widget(self.sl_sample)
-        self.contenu.add_widget(r1)
+        corps.add_widget(r1)
 
         # grille de pas : deux rangees de huit
         cadre = Panneau(orientation="vertical", size_hint_y=None,
@@ -2184,7 +2261,7 @@ class EcranPattern(BoxLayout):
                 self.pas.append(b)
                 ligne.add_widget(b)
             cadre.add_widget(ligne)
-        self.contenu.add_widget(cadre)
+        corps.add_widget(cadre)
 
         r2 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(4))
         self.b_fonc = {}
@@ -2194,7 +2271,7 @@ class EcranPattern(BoxLayout):
             b.bind(on_release=lambda w, n=nom: self._basculer_fonction(n))
             self.b_fonc[nom] = b
             r2.add_widget(b)
-        self.contenu.add_widget(r2)
+        corps.add_widget(r2)
 
         r3 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         self.lbl_niveau = Label(text="Niveau 127", size_hint_x=0.45,
@@ -2203,7 +2280,7 @@ class EcranPattern(BoxLayout):
         self.sl_niveau = Slider(min=0, max=127, value=127, step=1)
         self.sl_niveau.bind(value=self._changer_niveau)
         r3.add_widget(self.sl_niveau)
-        self.contenu.add_widget(r3)
+        corps.add_widget(r3)
 
         r4 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         for txt, fn in (("Vider partie", self._vider_partie),
@@ -2211,7 +2288,7 @@ class EcranPattern(BoxLayout):
             b = Bouton(text=txt, font_size=dp(12))
             b.bind(on_release=lambda w, f=fn: f())
             r4.add_widget(b)
-        self.contenu.add_widget(r4)
+        corps.add_widget(r4)
 
         r_ec = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r_ec.add_widget(Label(text="Tempo", size_hint_x=0.24, color=TEXTE,
@@ -2239,7 +2316,7 @@ class EcranPattern(BoxLayout):
         b_s.bind(on_release=lambda *_: NomPopup(
             "Nom du pattern", self.motif.nom, self._enregistrer).open())
         r5.add_widget(b_s)
-        self.contenu.add_widget(r5)
+        corps.add_widget(r5)
 
         r6 = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(6))
         r6.add_widget(Label(text="Vers", size_hint_x=0.22, color=TEXTE,
@@ -2250,11 +2327,11 @@ class EcranPattern(BoxLayout):
         self.b_env = Bouton(text="ENVOYER", couleur=ORANGE)
         self.b_env.bind(on_release=lambda *_: self.envoyer())
         r6.add_widget(self.b_env)
-        self.contenu.add_widget(r6)
+        corps.add_widget(r6)
 
         self.lbl_etat = Label(text="", size_hint_y=None, height=dp(22),
                               font_size=dp(11), color=TEXTE_2)
-        self.contenu.add_widget(self.lbl_etat)
+        corps.add_widget(self.lbl_etat)
 
         self.rafraichir()
         Clock.schedule_once(lambda *_: self._maj_syro(), 0.4)
