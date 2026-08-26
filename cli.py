@@ -19,8 +19,8 @@ import argparse
 import os
 import sys
 
-from volca import (__version__, audio, batch, etat, kit, pattern,
-                   project, reglages, syro, tips)
+from volca import (__version__, audio, batch, etat, kit, librarian,
+                   pattern, project, reglages, syro, tips)
 
 
 # ------------------------------------------------------------------ helpers
@@ -467,6 +467,57 @@ def cmd_pattern(a):
     return 0
 
 
+def cmd_librairie(a):
+    if a.action == "infos":
+        i = librarian.infos(a.source)
+        print("produit       : %s" % i["produit"])
+        print("modele        : %s" % i["modele"])
+        print("emplacements  : %d" % i["emplacements"])
+        print("sons reels    : %d" % i["sons"])
+        print("programmes    : %d" % i["programmes"])
+        return 0
+
+    if a.action == "patterns":
+        progs = librarian.programmes(a.source)
+        print("%d programme(s)" % len(progs))
+        for p in progs:
+            if "erreur" in p:
+                print("  %02d %-20s ECHEC %s" % (p["index"], p["nom"][:20],
+                                                 p["erreur"]))
+            else:
+                print("  %02d %-20s %2d partie(s)" % (
+                    p["index"], p["nom"][:20], len(p["utilisees"])))
+        if a.detail is not None:
+            p = next((x for x in progs if x["index"] == a.detail), None)
+            if p and "erreur" not in p:
+                print()
+                print("=== %s ===" % p["nom"])
+                print(librarian.grille(p))
+        return 0
+
+    # importer
+    dest = a.sortie or os.getcwd()
+    i = librarian.infos(a.source)
+    print("%s : %d son(s) sur %d emplacements" % (
+        i["produit"], i["sons"], i["emplacements"]))
+
+    def prog(n, total, num, nom):
+        print("[%3d/%3d] slot %03d  %s" % (n, total, num, nom[:32]))
+
+    p, rap = librarian.importer(a.source, dest, a.taux, prog)
+    ok = [r for r in rap if "erreur" not in r]
+    ko = [r for r in rap if "erreur" in r]
+    print()
+    print(p.resume().splitlines()[0])
+    print("%d son(s) importes, %d echec(s)" % (len(ok), len(ko)))
+    for r in ko:
+        print("  %03d %-24s %s" % (r["slot"], r["nom"][:24], r["erreur"]))
+    print()
+    print("Projet : %s" % p.chemin_fichier)
+    etat.memoriser_projet(p.chemin_fichier)
+    return 0
+
+
 def cmd_syro(_a):
     if syro.disponible():
         print("Envoi direct : DISPONIBLE (%s)" % syro.version())
@@ -585,6 +636,17 @@ def build_parser():
     p.add_argument("-o", "--sortie")
     p.add_argument("--jouer", action="store_true")
     p.set_defaults(func=cmd_pattern)
+
+    p = sub.add_parser("librairie",
+                       help="sauvegarde du librarian Korg (.vlcspllib)")
+    p.add_argument("action", choices=["infos", "importer", "patterns"])
+    p.add_argument("source")
+    p.add_argument("-o", "--sortie")
+    p.add_argument("--taux", type=int, default=librarian.TAUX_VOLCA,
+                   help="frequence des sons bruts (defaut %d)"
+                        % librarian.TAUX_VOLCA)
+    p.add_argument("--detail", type=int, help="afficher la grille d'un pattern")
+    p.set_defaults(func=cmd_librairie)
 
     p = sub.add_parser("syro", help="tester l'envoi direct")
     p.set_defaults(func=cmd_syro)

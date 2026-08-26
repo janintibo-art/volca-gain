@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover
 from kivy.app import App
 from kivy.clock import Clock, mainthread
 from kivy.core.window import Window
-from kivy.graphics import Color, Line, RoundedRectangle
+from kivy.graphics import Color, Line, RoundedRectangle, Triangle
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -45,8 +45,8 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
-from volca import (__version__, audio, batch, etat, kit, pattern,
-                   project, reglages, syro, tips)
+from volca import (__version__, audio, batch, etat, kit, librarian,
+                   pattern, project, reglages, syro, tips)
 
 # ---------------------------------------------------------------- palette
 FOND = (0.055, 0.055, 0.07, 1)
@@ -54,6 +54,7 @@ PANNEAU = (0.10, 0.10, 0.13, 1)
 ORANGE = (0.92, 0.33, 0.09, 1)
 ORANGE_S = (0.55, 0.20, 0.05, 1)
 GRIS = (0.19, 0.19, 0.23, 1)
+GRIS_CHOIX = (0.27, 0.27, 0.33, 1)  # fond des listes deroulantes
 VERT = (0.16, 0.62, 0.35, 1)
 BLEU = (0.24, 0.52, 0.78, 1)
 CYAN = (0.16, 0.80, 0.86, 1)   # le neon du logo
@@ -257,6 +258,42 @@ class SlotBouton(Bouton):
                 if b - a < 1:
                     b = a + 1
                 Line(points=[x, a, x, b], width=1)
+
+
+class Choix(Spinner):
+    """Liste deroulante avec un chevron : on voit qu'il y a d'autres
+    valeurs. Un Spinner nu ressemble a un bouton inerte."""
+
+    def __init__(self, **kw):
+        kw.setdefault("background_normal", "")
+        kw.setdefault("background_color", (0, 0, 0, 0))
+        kw.setdefault("color", TEXTE)
+        super().__init__(**kw)
+        with self.canvas.before:
+            self._fond = Color(*GRIS_CHOIX)
+            self._rect = RoundedRectangle(radius=[8])
+        with self.canvas.after:
+            self._coul = Color(*CYAN)
+            self._fleche = Triangle(points=[0, 0, 0, 0, 0, 0])
+        self.bind(pos=self._maj, size=self._maj, state=self._maj)
+        self._maj()
+
+    def _maj(self, *_a):
+        self._rect.pos = self.pos
+        self._rect.size = self.size
+        c = GRIS_CHOIX
+        if self.state == "down":
+            c = tuple(min(1.0, v * 1.4) for v in c[:3]) + (c[3],)
+        self._fond.rgba = c
+
+        # chevron a droite, centre verticalement
+        l = dp(9)
+        x = self.right - dp(14)
+        y = self.center_y + l * 0.35
+        self._fleche.points = [x - l / 2, y, x + l / 2, y, x, y - l * 0.75]
+
+    def marge_texte(self):
+        return dp(24)
 
 
 class Panneau(BoxLayout):
@@ -481,7 +518,7 @@ class ReglagesPopup(Popup):
         r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r0.add_widget(Label(text="Niveau", size_hint_x=0.3, color=TEXTE,
                             font_size=dp(12)))
-        self.spin_mode = Spinner(text="rms", values=["rms", "lufs"])
+        self.spin_mode = Choix(text="rms", values=["rms", "lufs"])
         r0.add_widget(self.spin_mode)
         box.add_widget(r0)
 
@@ -531,7 +568,7 @@ class KitPopup(Popup):
 
     def __init__(self, ecran, **kw):
         super().__init__(title="Kit portable", size_hint=(0.92, None),
-                         height=dp(300), **kw)
+                         height=dp(360), **kw)
         self.ecran = ecran
         box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
         box.add_widget(Label(
@@ -551,6 +588,11 @@ class KitPopup(Popup):
         b_i.bind(on_release=lambda *_: self._importer())
         box.add_widget(b_i)
 
+        b_l = Bouton(text="Importer une sauvegarde Korg", couleur=VERT,
+                     size_hint_y=None, height=dp(50), font_size=dp(13))
+        b_l.bind(on_release=lambda *_: self._librairie())
+        box.add_widget(b_l)
+
         b_f = Bouton(text="Fermer", size_hint_y=None, height=dp(44))
         b_f.bind(on_release=lambda *_: self.dismiss())
         box.add_widget(b_f)
@@ -568,6 +610,12 @@ class KitPopup(Popup):
     def _importer(self):
         self.dismiss()
         Chooser(self.ecran.importer_kit, filtres=["*.zip"]).open()
+
+    def _librairie(self):
+        """Sauvegarde .vlcspllib produite par le librarian officiel."""
+        self.dismiss()
+        Chooser(self.ecran.importer_librairie,
+                filtres=["*.vlcspllib", "*.VLCSPLLIB", "*.zip"]).open()
 
 
 class Chooser(Popup):
@@ -651,7 +699,7 @@ class SlotPopup(Popup):
 
         r1 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r1.add_widget(Label(text="Preset", size_hint_x=0.35, color=TEXTE))
-        self.spin = Spinner(text=slot.preset, values=sorted(audio.PRESETS))
+        self.spin = Choix(text=slot.preset, values=sorted(audio.PRESETS))
         r1.add_widget(self.spin)
         box.add_widget(r1)
 
@@ -783,7 +831,7 @@ class EcranTraitement(BoxLayout):
 
         row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         row.add_widget(Label(text="Preset", size_hint_x=0.3, color=TEXTE))
-        self.spin = Spinner(text="punch", values=sorted(audio.PRESETS))
+        self.spin = Choix(text="punch", values=sorted(audio.PRESETS))
         self.spin.bind(text=lambda _i, v: setattr(
             self.lbl_desc, "text", audio.PRESETS[v]["desc"]))
         row.add_widget(self.spin)
@@ -943,7 +991,7 @@ class EcranEditeur(BoxLayout):
         rc = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         rc.add_widget(Label(text="Canal", size_hint_x=0.25, color=TEXTE,
                             font_size=dp(12)))
-        self.spin_canal = Spinner(text="mix", values=list(audio.CANAUX))
+        self.spin_canal = Choix(text="mix", values=list(audio.CANAUX))
         self.spin_canal.bind(text=self._changer_canal)
         rc.add_widget(self.spin_canal)
         self.b_inv = Bouton(text="Inverser", font_size=dp(12), size_hint_x=0.5)
@@ -953,7 +1001,7 @@ class EcranEditeur(BoxLayout):
 
         r1 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         r1.add_widget(Label(text="Preset", size_hint_x=0.25, color=TEXTE))
-        self.spin = Spinner(text="punch", values=sorted(audio.PRESETS))
+        self.spin = Choix(text="punch", values=sorted(audio.PRESETS))
         self.spin.bind(text=lambda *_: self._oublier_override())
         r1.add_widget(self.spin)
         b_fin = Bouton(text="Fins", font_size=dp(12), size_hint_x=0.3,
@@ -1185,13 +1233,19 @@ class EcranEditeur(BoxLayout):
 
     # ------------------------------------------------------------ sorties
     def exporter(self):
+        """Demande un nom avant d'ecrire : on renomme au moment utile."""
         if self.original is None:
             self.journal("Charge d'abord un WAV.")
             return
+        base = os.path.splitext(os.path.basename(self.chemin))[0]
+        NomPopup("Nom du fichier", base + "_edit", self._faire_exporter).open()
+
+    def _faire_exporter(self, nom):
         try:
             s = self._selection(True)
-            base = os.path.splitext(os.path.basename(self.chemin))[0]
-            out = os.path.join(dossier_travail(), base + "_edit.wav")
+            net = "".join(c if c.isalnum() or c in "-_ " else "_"
+                          for c in nom).strip() or "sample"
+            out = os.path.join(dossier_travail(), net + ".wav")
             audio.write_wav(out, s)
             self.journal("Exporte : %s" % out)
         except Exception as e:  # noqa: BLE001
@@ -1205,15 +1259,25 @@ class EcranEditeur(BoxLayout):
         ChoixSlot(ecran.projet, lambda i: self._poser(ecran, i)).open()
 
     def _poser(self, ecran, index):
+        """Demande le nom du slot avant de l'occuper."""
+        base = os.path.splitext(os.path.basename(self.chemin or "sample"))[0]
+        NomPopup("Nom dans le slot %d" % index, base[:40],
+                 lambda nom: self._faire_poser(ecran, index, nom)).open()
+
+    def _faire_poser(self, ecran, index, nom):
         try:
             s = self._selection(True)
-            out = os.path.join(dossier_travail(), "slot%02d_edit.wav" % index)
+            net = "".join(c if c.isalnum() or c in "-_ " else "_"
+                          for c in nom).strip() or "sample"
+            out = os.path.join(dossier_travail(),
+                               "slot%03d_%s.wav" % (index, net))
             audio.write_wav(out, s)
-            # deja traite : on met le preset doux pour ne pas traiter 2 fois
+            # deja traite : preset doux pour ne pas traiter deux fois
             ecran.projet.assigner(index, out, "doux", 0.0)
+            ecran.projet.renommer(index, nom)
             ecran.rafraichir()
-            self.journal("Slot %02d <- %.0f ms (deja traite)"
-                         % (index, s.duration_ms))
+            self.journal("Slot %d <- %s (%.0f ms, deja traite)"
+                         % (index, nom, s.duration_ms))
         except Exception as e:  # noqa: BLE001
             self.journal("Echec : %s" % e)
 
@@ -1251,7 +1315,7 @@ class EcranSlots(BoxLayout):
         rm = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         rm.add_widget(Label(text="Machine", size_hint_x=0.32, color=TEXTE,
                             font_size=dp(12)))
-        self.spin_modele = Spinner(
+        self.spin_modele = Choix(
             text=project.MODELES[self.projet.modele]["libelle"],
             values=[m["libelle"] for m in project.MODELES.values()])
         self.spin_modele.bind(text=self._changer_modele)
@@ -1302,7 +1366,7 @@ class EcranSlots(BoxLayout):
         r2 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r2.add_widget(Label(text="Qualite", size_hint_x=0.35, font_size=dp(12),
                             color=TEXTE))
-        self.spin_q = Spinner(text="16",
+        self.spin_q = Choix(text="16",
                               values=[str(i) for i in range(16, 7, -1)])
         r2.add_widget(self.spin_q)
         self.contenu.add_widget(r2)
@@ -1514,6 +1578,42 @@ class EcranSlots(BoxLayout):
             self.journal("Taille : %.1f Mo. Partageable tel quel." % taille)
         except Exception as e:  # noqa: BLE001
             self.journal("Export impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    def importer_librairie(self, chemin):
+        if self.busy:
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_librairie, args=(chemin,),
+                         daemon=True).start()
+
+    def _worker_librairie(self, chemin):
+        try:
+            i = librarian.infos(chemin)
+            self.journal("--- SAUVEGARDE KORG ---")
+            self.journal("%s : %d son(s) sur %d emplacements, %d patterns"
+                         % (i["produit"], i["sons"], i["emplacements"],
+                            i["programmes"]))
+            self.journal("Extraction, cela peut prendre une minute...")
+
+            def prog(n, total, num, nom):
+                if n % 20 == 0 or n == total:
+                    self.journal("  %d/%d" % (n, total))
+
+            p, rap = librarian.importer(chemin, dossier_travail(),
+                                        progression=prog)
+            ko = [r for r in rap if "erreur" in r]
+            self.journal("%d son(s) importes, %d echec(s)"
+                         % (len(rap) - len(ko), len(ko)))
+            for r in ko[:5]:
+                self.journal("  %03d %s : %s" % (r["slot"], r["nom"][:16],
+                                                 r["erreur"]))
+            self._poser_projet(p)
+            self.journal("Sons bruts, non traites : passe par TRAIT. ou "
+                         "EDIT. pour les retravailler.")
+        except Exception as e:  # noqa: BLE001
+            self.journal("Import impossible : %s" % e)
         finally:
             self.busy = False
 
@@ -1757,7 +1857,7 @@ class EcranPattern(BoxLayout):
         r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r0.add_widget(Label(text="Partie", size_hint_x=0.3, color=TEXTE,
                             font_size=dp(12)))
-        self.spin_partie = Spinner(
+        self.spin_partie = Choix(
             text="1", values=[str(i) for i in range(1, 11)])
         self.spin_partie.bind(text=self._changer_partie)
         r0.add_widget(self.spin_partie)
@@ -1828,7 +1928,7 @@ class EcranPattern(BoxLayout):
         r6 = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(6))
         r6.add_widget(Label(text="Vers", size_hint_x=0.22, color=TEXTE,
                             font_size=dp(12)))
-        self.spin_dest = Spinner(text="0", values=[str(i) for i in range(10)],
+        self.spin_dest = Choix(text="0", values=[str(i) for i in range(10)],
                                  size_hint_x=0.28)
         r6.add_widget(self.spin_dest)
         self.b_env = Bouton(text="ENVOYER", couleur=ORANGE)
@@ -1967,7 +2067,7 @@ class EcranTuto(BoxLayout):
 
         r = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         r.add_widget(Label(text="Sujet", size_hint_x=0.25, color=TEXTE))
-        self.spin = Spinner(text=tips.titres()[0], values=tips.titres(),
+        self.spin = Choix(text=tips.titres()[0], values=tips.titres(),
                             text_size=(None, None))
         self.spin.bind(text=self._maj)
         r.add_widget(self.spin)
