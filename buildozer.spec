@@ -1,13 +1,13 @@
 [app]
-title = Volca Gain
-package.name = volcagain
-package.domain = org.volcagain
+title = MOC'TA BASS
+package.name = moctabass
+package.domain = org.moctek
 
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,txt,md
-source.include_patterns = volca/*.py
+source.include_patterns = volca/*.py,assets/*.png
 source.exclude_dirs = tests,packaging,.github,bin,.buildozer,native
-version = 0.7.0
+version = 0.8.0
 
 # Uniquement la stdlib + Kivy : pas de numpy, pas de recette a compiler.
 requirements = python3,kivy==2.3.0
@@ -32,8 +32,9 @@ android.add_libs_arm64_v8a = native/prebuilt/android/arm64-v8a/*.so
 android.add_libs_armeabi_v7a = native/prebuilt/android/armeabi-v7a/*.so
 
 # icone / splash : decommente quand tu auras les images
-# icon.filename = %(source.dir)s/assets/icon.png
-# presplash.filename = %(source.dir)s/assets/presplash.png
+icon.filename = %(source.dir)s/assets/icon.png
+presplash.filename = %(source.dir)s/assets/presplash.png
+android.presplash_color = #0e0e12
 
 [buildozer]
 log_level = 2

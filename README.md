@@ -1,4 +1,4 @@
-# Volca Gain
+# MOC'TA BASS
 
 Une seule application pour la **Korg volca sample** : traiter le son *et*
 l'envoyer. Plus besoin du librarian Korg.

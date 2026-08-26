@@ -13,6 +13,7 @@ Sans Kivy : utiliser cli.py (aucune dependance).
 """
 
 import os
+import sys
 import tempfile
 import threading
 
@@ -34,6 +35,7 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.gridlayout import GridLayout
+from kivy.uix.image import Image as KivyImage
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.progressbar import ProgressBar
@@ -54,11 +56,24 @@ ORANGE_S = (0.55, 0.20, 0.05, 1)
 GRIS = (0.19, 0.19, 0.23, 1)
 VERT = (0.16, 0.62, 0.35, 1)
 BLEU = (0.24, 0.52, 0.78, 1)
+CYAN = (0.16, 0.80, 0.86, 1)   # le neon du logo
 TEXTE = (0.90, 0.90, 0.92, 1)
 TEXTE_2 = (0.62, 0.62, 0.68, 1)
 
 IS_ANDROID = "ANDROID_ARGUMENT" in os.environ
 TMP = tempfile.mkdtemp(prefix="volcagain_ui_")
+
+
+def chemin_asset(nom):
+    """Trouve une image, y compris dans un .exe PyInstaller."""
+    bases = [os.path.dirname(os.path.abspath(__file__))]
+    if hasattr(sys, "_MEIPASS"):
+        bases.insert(0, sys._MEIPASS)
+    for b in bases:
+        for p in (os.path.join(b, "assets", nom), os.path.join(b, nom)):
+            if os.path.isfile(p):
+                return p
+    return None
 
 
 def default_dir():
@@ -378,7 +393,7 @@ class ReglagesPopup(Popup):
         b_ec = Bouton(text="Ecouter", couleur=VERT)
         b_ec.bind(on_release=lambda *_: self.on_apercu(self.config()))
         r1.add_widget(b_ec)
-        b_sv = Bouton(text="Enregistrer", couleur=BLEU)
+        b_sv = Bouton(text="Enregistrer", couleur=CYAN)
         b_sv.bind(on_release=lambda *_: self._enregistrer())
         r1.add_widget(b_sv)
         b_ok = Bouton(text="Appliquer", couleur=ORANGE)
@@ -513,7 +528,7 @@ class SlotPopup(Popup):
         for txt, action in (("Deplacer", "deplacer"),
                             ("Echanger", "echanger"),
                             ("Copier", "dupliquer")):
-            bb = Bouton(text=txt, font_size=dp(12), couleur=BLEU)
+            bb = Bouton(text=txt, font_size=dp(12), couleur=CYAN)
             bb.bind(on_release=lambda w, a=action: self._ranger(a))
             r_rang.add_widget(bb)
         box.add_widget(r_rang)
@@ -625,7 +640,7 @@ class EcranTraitement(BoxLayout):
         self.add_widget(row2)
 
         row3 = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(6))
-        self.b_ana = Bouton(text="Analyser", couleur=BLEU)
+        self.b_ana = Bouton(text="Analyser", couleur=CYAN)
         self.b_ana.bind(on_release=lambda *_: self.lancer(True))
         row3.add_widget(self.b_ana)
         self.b_go = Bouton(text="TRAITER", couleur=ORANGE)
@@ -776,7 +791,7 @@ class EcranEditeur(BoxLayout):
         self.spin.bind(text=lambda *_: self._oublier_override())
         r1.add_widget(self.spin)
         b_fin = Bouton(text="Fins", font_size=dp(12), size_hint_x=0.3,
-                       couleur=BLEU)
+                       couleur=CYAN)
         b_fin.bind(on_release=lambda *_: self._reglages_fins())
         r1.add_widget(b_fin)
         self.add_widget(r1)
@@ -792,7 +807,7 @@ class EcranEditeur(BoxLayout):
         self.add_widget(r2)
 
         r3 = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(6))
-        self.b_a = Bouton(text="A  original", couleur=BLEU)
+        self.b_a = Bouton(text="A  original", couleur=CYAN)
         self.b_a.bind(on_release=lambda *_: self.jouer(False))
         r3.add_widget(self.b_a)
         self.b_b = Bouton(text="B  traite", couleur=VERT)
@@ -1056,7 +1071,7 @@ class EcranSlots(BoxLayout):
         b_c.bind(on_release=lambda *_: Chooser(
             self._charger, filtres=["*.json"]).open())
         r1.add_widget(b_c)
-        b_m = Bouton(text="Optimiser", couleur=BLEU)
+        b_m = Bouton(text="Optimiser", couleur=CYAN)
         b_m.bind(on_release=lambda *_: self._memoire())
         r1.add_widget(b_m)
         self.add_widget(r1)
@@ -1341,9 +1356,19 @@ class Root(BoxLayout):
         super().__init__(orientation="vertical", spacing=dp(6),
                          padding=dp(8), **kw)
 
-        self.add_widget(Label(
-            text="[b]VOLCA GAIN[/b]  [size=13sp]v%s[/size]" % __version__,
-            markup=True, size_hint_y=None, height=dp(30), color=ORANGE))
+        entete = BoxLayout(orientation="vertical", size_hint_y=None,
+                           height=dp(52), spacing=0)
+        logo = chemin_asset("logo.png")
+        if logo:
+            entete.add_widget(KivyImage(source=logo, allow_stretch=True,
+                                        keep_ratio=True, size_hint_y=0.78))
+        else:
+            entete.add_widget(Label(text="[b]MOC'TA BASS[/b]", markup=True,
+                                    color=CYAN, size_hint_y=0.78))
+        entete.add_widget(Label(
+            text="volca sample  -  v%s" % __version__, font_size=dp(10),
+            color=TEXTE_2, size_hint_y=0.22))
+        self.add_widget(entete)
 
         barre = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(4))
         self.tabs = []
@@ -1393,7 +1418,7 @@ class Root(BoxLayout):
 
 
 class VolcaGainApp(App):
-    title = "Volca Gain"
+    title = "MOC'TA BASS"
 
     def build(self):
         Window.clearcolor = FOND

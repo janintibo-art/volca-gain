@@ -11,7 +11,10 @@ a = Analysis(
     ['../main.py'],
     pathex=[os.path.abspath('.')],
     binaries=[],
-    datas=[('../native/syro.dll', '.')] if os.path.isfile('native/syro.dll') else [],
+    datas=([('../assets/logo.png', 'assets'),
+            ('../assets/icon.png', 'assets')]
+           + ([('../native/syro.dll', '.')]
+              if os.path.isfile('native/syro.dll') else [])),
     hiddenimports=['volca', 'volca.audio', 'volca.batch', 'volca.project', 'volca.syro', 'volca.tips', 'volca.reglages'],
     hookspath=[],
     runtime_hooks=[],
@@ -28,9 +31,10 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     *[Tree(p) for p in (sdl2.dep_bins + glew.dep_bins)],
-    name='VolcaGain',
+    name="MOC'TA BASS",
     debug=False,
     strip=False,
     upx=False,   # upx ralentit fortement le build pour peu de gain
     console=False,
+    icon='../assets/icon.ico',
 )
