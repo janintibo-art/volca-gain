@@ -238,13 +238,51 @@ jobs:
           files: livraison/*
           generate_release_notes: true
           body: |
-            ## MOC'TA BASS ${{ github.ref_name }}
+            # MOC'TA BASS ${{ github.ref_name }}
 
-            **Android** : telecharge le `.apk` et installe-le
-            (autorise les sources inconnues a la premiere installation).
+            Traitement du son **et** transfert direct pour la **Korg volca
+            sample** et la **volca sample2**. Le librarian Korg devient
+            inutile.
+
+            ## Installation
+
+            **Android** : telecharge le `.apk` ci-dessous et installe-le.
+            Autorise les sources inconnues a la premiere installation.
 
             **Windows** : telecharge le `.zip`, decompresse, lance
             `MOC'TA BASS.exe`.
 
-            Traitement du son et envoi direct vers la Korg volca sample
-            par SYNC IN. Le librarian Korg n'est pas necessaire.
+            ## Ce que ca fait
+
+            **Le probleme resolu** : le librarian officiel plafonne LEVEL a
+            100 %, il ne peut que baisser le volume. Un sample trop faible
+            reste trop faible. Ici, le traitement se fait AVANT le transfert.
+            Sur un kick a -32,8 dB RMS : **+27 dB recuperes**, sans ecretage.
+
+            - **Traitement** : passe-haut, transient shaper, compresseur,
+              saturation, porte de bruit, limiteur. Six presets, onze
+              reglages fins, presets personnalises.
+            - **Editeur** : forme d'onde, decoupe calee sur les passages par
+              zero, comparaison A/B, annulation.
+            - **Slots** : 100 sur sample, 200 sur sample2. Renommage,
+              rangement, optimisation memoire, egalisation du kit.
+            - **Patterns** : les 10 sequences de 16 pas, format Korg.
+            - **Import des sauvegardes du librarian** (`.vlcspllib` et
+              `.vlcsplpatt`) : sons, noms et placement restaures.
+            - **Envoi direct** par SYNC IN, avec compte a rebours.
+            - **Kits portables** pour changer de telephone ou partager.
+
+            ## Brancher
+
+            Cable jack 3,5 mm de la sortie casque vers **SYNC IN**, volume a
+            fond, Bluetooth coupe, aucun egaliseur. L'envoi ecrase le slot
+            de destination sans confirmation.
+
+            ## Bon a savoir
+
+            L'envoi s'appuie sur le Syro SDK de Korg, qui vise la volca
+            sample premiere generation. Les emplacements au-dela de 99 et
+            les patterns de sample2 restent a confirmer sur machine reelle.
+
+            Code source, tutoriel integre et 160 tests :
+            https://github.com/janintibo-art/volca-gain
