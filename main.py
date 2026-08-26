@@ -186,6 +186,39 @@ RACCOURCIS_ANDROID = [
 ]
 
 
+def demander_acces_total():
+    """Ouvre l'ecran systeme "Acces a tous les fichiers".
+
+    Android 11 et plus : la permission de stockage ordinaire ne suffit
+    plus pour parcourir les dossiers. Il faut cet ecran a part, que
+    l'utilisateur doit valider a la main.
+    Sur Android 10, c'est le drapeau requestLegacyExternalStorage du
+    manifeste qui fait le travail, et cette fonction ne sert a rien.
+    """
+    if not IS_ANDROID:
+        return "hors Android"
+    try:
+        from jnius import autoclass
+        version = autoclass("android.os.Build$VERSION")
+        if version.SDK_INT < 30:
+            return "Android %d : l'acces devrait deja fonctionner" % \
+                version.SDK_INT
+        Environment = autoclass("android.os.Environment")
+        if Environment.isExternalStorageManager():
+            return "acces complet deja accorde"
+        Intent = autoclass("android.content.Intent")
+        Settings = autoclass("android.provider.Settings")
+        Uri = autoclass("android.net.Uri")
+        activite = autoclass("org.kivy.android.PythonActivity").mActivity
+        intent = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:" + activite.getPackageName()))
+        activite.startActivity(intent)
+        return "ecran systeme ouvert : autorise, puis reviens"
+    except Exception as e:  # noqa: BLE001
+        return "impossible : %s" % e
+
+
 def raccourcis():
     """Dossiers utiles qui existent vraiment sur cet appareil."""
     out, vus = [], set()
@@ -678,6 +711,14 @@ class Chooser(Popup):
                 barre.add_widget(b)
             box.add_widget(barre)
 
+        if IS_ANDROID:
+            b_acces = Bouton(text="Autoriser l'acces aux fichiers",
+                             font_size=dp(11), couleur=VERT,
+                             size_hint_y=None, height=dp(36))
+            b_acces.bind(on_release=lambda *_: setattr(
+                self.lbl, "text", demander_acces_total()))
+            box.add_widget(b_acces)
+
         self.chooser = FileChooserListView(
             path=start or default_dir(), dirselect=dossiers,
             filters=filtres or ["*"])
@@ -716,6 +757,10 @@ class Chooser(Popup):
         if os.path.isdir(chemin):
             try:
                 os.listdir(chemin)
+            except PermissionError:
+                self.lbl.text = ("Acces refuse par Android. Appuie sur "
+                                 "Autoriser l'acces aux fichiers.")
+                return
             except Exception as e:  # noqa: BLE001
                 self.lbl.text = "Dossier illisible : %s" % e
                 return
