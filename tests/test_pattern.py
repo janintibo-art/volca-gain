@@ -254,3 +254,112 @@ class TestRendu(unittest.TestCase):
         self.m.partie(1).mettre("reverse")
         r = pattern.rendu(self.m, self.sons, 120)
         self.assertGreater(r.peak(), 0.0)
+
+
+class TestPotards(unittest.TestCase):
+    """Simulation des potards a l'ecoute."""
+
+    def setUp(self):
+        import math as _m
+        sys.path.insert(0, os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        from volca import audio
+        self.audio = audio
+        n = int(44100 * 0.3)
+        self.sons = {3: audio.Sample(
+            [0.4 * _m.sin(2 * _m.pi * 220 * i / 44100) for i in range(n)],
+            44100)}
+        self.m = pattern.vierge("t")
+        self.p = self.m.partie(1)
+        self.p.sample_num = 3
+        self.p.depuis_liste([1, 5, 9, 13])
+        self.p.params.update(pattern.DEFAUTS)
+
+    def _rms(self, **kw):
+        self.p.params.update(pattern.DEFAUTS)
+        self.p.params.update(kw)
+        return pattern.rendu(self.m, self.sons, 120).rms_db()
+
+    def test_longueur_raccourcit(self):
+        self.assertLess(self._rms(length=40), self._rms() - 3)
+
+    def test_point_de_depart(self):
+        self.assertLess(self._rms(start_point=60), self._rms() - 1)
+
+    def test_chute_rapide(self):
+        self.assertLess(self._rms(ampeg_decay=30), self._rms() - 10)
+
+    def test_attaque_douce(self):
+        self.assertLess(self._rms(ampeg_attack=80), self._rms())
+
+    def test_vitesse_modifie_le_son(self):
+        rapide = self._rms(speed=96)
+        lent = self._rms(speed=32)
+        self.assertNotAlmostEqual(rapide, lent, places=1)
+
+    def test_coupe_haut_sur_du_bruit(self):
+        import random
+        from volca import audio
+        random.seed(1)
+        sons = {3: audio.Sample(
+            [random.uniform(-0.4, 0.4) for _ in range(int(44100 * 0.2))],
+            44100)}
+        m = pattern.vierge("b")
+        p = m.partie(1)
+        p.sample_num = 3
+        p.depuis_liste([1])
+        p.params.update(pattern.DEFAUTS)
+        ouvert = pattern.rendu(m, sons, 120).rms_db()
+        p.params["hicut"] = 30
+        ferme = pattern.rendu(m, sons, 120).rms_db()
+        self.assertLess(ferme, ouvert - 5)
+
+    def test_potards_desactivables(self):
+        self.p.params["length"] = 20
+        avec = pattern.rendu(self.m, self.sons, 120).rms_db()
+        sans = pattern.rendu(self.m, self.sons, 120, potards=False).rms_db()
+        self.assertGreater(sans, avec)
+
+    def test_valeurs_extremes_ne_plantent_pas(self):
+        for cle in pattern.PARAMS:
+            for v in (0, 127):
+                self.p.params.update(pattern.DEFAUTS)
+                self.p.params[cle] = v
+                r = pattern.rendu(self.m, self.sons, 120)
+                self.assertLessEqual(r.peak_db(), 0.1, "%s=%d" % (cle, v))
+
+
+class TestSwing(unittest.TestCase):
+    def setUp(self):
+        import math as _m
+        from volca import audio
+        n = int(44100 * 0.05)
+        self.sons = {3: audio.Sample(
+            [0.6 * _m.exp(-i / n * 10) for i in range(n)], 44100)}
+        self.m = pattern.vierge("t")
+        self.m.partie(1).sample_num = 3
+        self.m.partie(1).depuis_liste([1, 2, 3, 4])
+
+    def _attaques(self, swing):
+        r = pattern.rendu(self.m, self.sons, 120, swing=swing)
+        out, dernier = [], -9999
+        for i, v in enumerate(r.data):
+            if abs(v) > 0.05 and i - dernier > 1000:
+                out.append(round(i / 44100.0, 3))
+                dernier = i
+        return out
+
+    def test_sans_swing_les_pas_sont_reguliers(self):
+        a = self._attaques(0.5)
+        ecarts = [round(a[i + 1] - a[i], 3) for i in range(len(a) - 1)]
+        self.assertEqual(len(set(ecarts)), 1)
+
+    def test_swing_retarde_un_pas_sur_deux(self):
+        a = self._attaques(0.62)
+        self.assertEqual(a[0], 0.0)
+        self.assertGreater(a[1], 0.125)
+        self.assertAlmostEqual(a[2], 0.25, delta=0.01)
+
+    def test_swing_borne(self):
+        loin = self._attaques(0.99)
+        self.assertLess(loin[1], 0.25)

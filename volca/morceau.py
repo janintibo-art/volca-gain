@@ -50,9 +50,11 @@ class Section:
 
 
 class Morceau:
-    def __init__(self, nom="morceau", bpm=120.0):
+    def __init__(self, nom="morceau", bpm=120.0, swing=0.5):
         self.nom = nom
         self.bpm = float(bpm)
+        # 0,50 = pas reguliers ; au-dela, un pas sur deux est retarde
+        self.swing = float(swing)
         self.sections = []
         self.chemin_fichier = None
 
@@ -113,9 +115,11 @@ class Morceau:
         return sorted(out)
 
     def resume(self):
-        lignes = ["Morceau '%s' - %d section(s), %d mesure(s), %.1f s a %.0f bpm"
+        sw = "" if abs(self.swing - 0.5) < 0.01 else \
+            "  swing %.0f %%" % (self.swing * 100)
+        lignes = ["Morceau '%s' - %d section(s), %d mesure(s), %.1f s a %.0f bpm%s"
                   % (self.nom, len(self.sections), self.pas // pattern.NB_PAS,
-                     self.duree_s(), self.bpm)]
+                     self.duree_s(), self.bpm, sw)]
         for i, s in enumerate(self.sections):
             lignes.append("  %2d  %-20s x%-3d  %5.1f s  (%d partie(s))" % (
                 i + 1, s.nom[:20], s.repetitions, s.duree_s(self.bpm),
@@ -133,12 +137,13 @@ class Morceau:
         if total <= 0:
             return audio.Sample([], rate, self.nom)
 
-        melange = [0.0] * (total + pattern.queue_max(sons))
+        melange = [0.0] * (total + pattern.queue_max(sons) * 2)
         offset = 0
         n = 0
         for s in self.sections:
             for _ in range(s.repetitions):
-                pattern.poser(melange, s.motif, sons, rate, par_pas, offset)
+                pattern.poser(melange, s.motif, sons, rate, par_pas, offset,
+                              self.swing)
                 offset += pattern.NB_PAS
                 n += 1
                 if progression:
@@ -154,6 +159,7 @@ class Morceau:
     def sauver(self, chemin=None):
         chemin = chemin or self.chemin_fichier or (self.nom + ".morceau.json")
         data = {"format": 1, "nom": self.nom, "bpm": self.bpm,
+                "swing": self.swing,
                 "sections": [s.to_dict() for s in self.sections]}
         with open(chemin, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -164,7 +170,8 @@ class Morceau:
     def charger(chemin):
         with open(chemin, "r", encoding="utf-8") as f:
             data = json.load(f)
-        m = Morceau(data.get("nom", "morceau"), data.get("bpm", 120.0))
+        m = Morceau(data.get("nom", "morceau"), data.get("bpm", 120.0),
+                    data.get("swing", 0.5))
         for d in data.get("sections", []):
             m.sections.append(Section.from_dict(d))
         m.chemin_fichier = chemin
@@ -173,7 +180,8 @@ class Morceau:
 
 def infos(chemin):
     m = Morceau.charger(chemin)
-    return {"nom": m.nom, "bpm": m.bpm, "sections": len(m.sections),
+    return {"nom": m.nom, "bpm": m.bpm, "swing": m.swing,
+            "sections": len(m.sections),
             "duree_s": round(m.duree_s(), 1),
             "samples": m.samples_utilises()}
 

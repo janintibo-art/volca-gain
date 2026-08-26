@@ -2402,10 +2402,14 @@ class EcranPattern(BoxLayout):
         r_ec = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r_ec.add_widget(Label(text="Tempo", size_hint_x=0.24, color=TEXTE,
                               font_size=dp(12)))
-        self.spin_bpm = Choix(text="120", size_hint_x=0.3,
+        self.spin_bpm = Choix(text="120", size_hint_x=0.26,
                               values=["90", "100", "110", "120", "130", "140",
                                       "150", "160", "170", "174", "180"])
         r_ec.add_widget(self.spin_bpm)
+        self.spin_swing = Choix(text="50 %", size_hint_x=0.26,
+                                values=["50 %", "54 %", "58 %", "62 %",
+                                        "66 %"])
+        r_ec.add_widget(self.spin_swing)
         b_play = Bouton(text="> Ecouter", couleur=VERT)
         b_play.bind(on_release=lambda *_: self.ecouter())
         r_ec.add_widget(b_play)
@@ -2615,9 +2619,11 @@ class EcranPattern(BoxLayout):
                              % ", ".join(str(n) for n in manquants))
 
             bpm = float(self.spin_bpm.text)
-            rendu = pattern.rendu(self.motif, sons, bpm)
-            self.journal("Ecoute a %.0f bpm (%.1f s, %d son(s))"
-                         % (bpm, rendu.duration_ms / 1000.0, len(sons)))
+            swing = float(self.spin_swing.text.replace("%", "").strip()) / 100.0
+            rendu = pattern.rendu(self.motif, sons, bpm, swing=swing)
+            self.journal("Ecoute a %.0f bpm, swing %.0f %% (%.1f s, %d son(s))"
+                         % (bpm, swing * 100, rendu.duration_ms / 1000.0,
+                            len(sons)))
             self._lire(rendu)
         except Exception as e:  # noqa: BLE001
             self.journal("Ecoute impossible : %s" % e)
@@ -2702,6 +2708,13 @@ class EcranMorceau(BoxLayout):
                                       "180", "190", "200"])
         self.spin_bpm.bind(text=self._changer_bpm)
         r0.add_widget(self.spin_bpm)
+        r0.add_widget(Label(text="Swing", size_hint_x=0.24, color=TEXTE,
+                            font_size=dp(12)))
+        self.spin_swing = Choix(text="50 %", size_hint_x=0.3,
+                                values=["50 %", "54 %", "58 %", "62 %",
+                                        "66 %"])
+        self.spin_swing.bind(text=self._changer_swing)
+        r0.add_widget(self.spin_swing)
         corps.add_widget(r0)
 
         cadre = Panneau(orientation="vertical", size_hint_y=None,
@@ -2790,11 +2803,17 @@ class EcranMorceau(BoxLayout):
                 color=TEXTE_2))
 
         m = self.morceau
-        self.lbl_etat.text = "%s : %d section(s), %d mesure(s), %.1f s" % (
-            m.nom, len(m.sections), m.pas // pattern.NB_PAS, m.duree_s())
+        sw = "" if abs(m.swing - 0.5) < 0.01 else \
+            "  swing %.0f %%" % (m.swing * 100)
+        self.lbl_etat.text = "%s : %d section(s), %d mesure(s), %.1f s%s" % (
+            m.nom, len(m.sections), m.pas // pattern.NB_PAS, m.duree_s(), sw)
 
     def _changer_bpm(self, _sp, txt):
         self.morceau.bpm = float(txt)
+        self.rafraichir()
+
+    def _changer_swing(self, _sp, txt):
+        self.morceau.swing = float(txt.replace("%", "").strip()) / 100.0
         self.rafraichir()
 
     def _repeter(self, index, delta):
@@ -2946,6 +2965,7 @@ class EcranMorceau(BoxLayout):
         try:
             self.morceau = morceau.Morceau.charger(chemin)
             self.spin_bpm.text = "%d" % int(self.morceau.bpm)
+            self.spin_swing.text = "%.0f %%" % (self.morceau.swing * 100)
             self.rafraichir()
             self.journal("Morceau charge : %s (%d sections)"
                          % (self.morceau.nom, len(self.morceau.sections)))

@@ -21,6 +21,7 @@ Et chaque partie, 256 octets :
 Tout est en petit-boutiste.
 """
 
+import math
 import os
 import struct
 
@@ -255,25 +256,112 @@ class Motif:
 
 
 # --------------------------------------------------------------------------
-def poser(melange, motif, sons, rate, par_pas, offset_pas=0):
+def _appliquer_potards(sample, p, rate):
+    """Reproduit les potards de la partie sur un son.
+
+    Ordre de la machine : on decoupe d'abord (point de depart, longueur),
+    puis on change la vitesse, puis on filtre, puis on applique
+    l'enveloppe d'amplitude.
+
+    Les potards vont de 0 a 127, 64 etant le milieu. La correspondance
+    exacte avec la machine n'est pas documentee : ce sont des courbes
+    plausibles, pas une simulation certifiee.
+    """
+    par = p.params
+    d = list(sample.data)
+    n = len(d)
+    if n == 0:
+        return sample
+
+    # --- decoupe : point de depart et longueur ---
+    depart = int(n * max(0, min(127, par.get("start_point", 0))) / 127.0)
+    longueur = max(0, min(127, par.get("length", 127))) / 127.0
+    if depart > 0 or longueur < 1.0:
+        fin = depart + max(1, int((n - depart) * longueur))
+        d = d[depart:fin]
+        n = len(d)
+        if n == 0:
+            return audio.Sample([], sample.rate, sample.name)
+
+    # --- vitesse : 64 = normal, plus haut = plus rapide et plus aigu ---
+    vitesse = max(0, min(127, par.get("speed", 64)))
+    if vitesse != 64:
+        facteur = 2.0 ** ((vitesse - 64) / 32.0)   # +-4 octaves aux extremes
+        facteur = max(0.06, min(16.0, facteur))
+        cible = max(1, int(n / facteur))
+        sortie = [0.0] * cible
+        for i in range(cible):
+            pos = i * facteur
+            j = int(pos)
+            if j >= n - 1:
+                sortie[i] = d[n - 1]
+            else:
+                f = pos - j
+                sortie[i] = d[j] * (1.0 - f) + d[j + 1] * f
+        d = sortie
+        n = cible
+
+    s = audio.Sample(d, rate, sample.name)
+
+    # --- coupe-haut : 127 = ouvert ---
+    hicut = max(0, min(127, par.get("hicut", 127)))
+    if hicut < 120:
+        freq = 200.0 * (2.0 ** (hicut / 18.0))
+        freq = max(150.0, min(freq, rate * 0.45))
+        a = math.exp(-2.0 * math.pi * freq / rate)
+        y = 0.0
+        lisse = []
+        for x in s.data:
+            y = a * y + (1.0 - a) * x
+            lisse.append(y)
+        s.data = lisse
+
+    # --- enveloppe d'amplitude ---
+    att = max(0, min(127, par.get("ampeg_attack", 0)))
+    dec = max(0, min(127, par.get("ampeg_decay", 127)))
+    if att > 0 or dec < 127:
+        n = len(s.data)
+        n_att = int(n * (att / 127.0) * 0.5)
+        out = list(s.data)
+        for i in range(min(n_att, n)):
+            out[i] *= i / float(max(n_att, 1))
+        if dec < 127:
+            # 127 = pas de chute ; plus bas = extinction plus rapide
+            duree = max(0.02, (dec / 127.0) ** 2 * (n / float(rate)))
+            k = 1.0 / (duree * rate)
+            for i in range(n_att, n):
+                out[i] *= math.exp(-(i - n_att) * k)
+        s.data = out
+
+    return s
+
+
+def poser(melange, motif, sons, rate, par_pas, offset_pas=0, swing=0.5,
+          potards=True):
     """Mele un pattern dans un tampon deja alloue, a partir d'un pas donne.
 
     Sert a la fois pour l'ecoute d'un pattern seul et pour l'enchainement
     d'un morceau entier : les queues de sons debordent naturellement sur
     la suite, comme sur la machine.
     """
+    decalage = max(0.0, min(0.35, swing - 0.5)) * 2.0 * par_pas
     for p in motif.parties_utilisees():
         if p.actif("mute"):
             continue
         s = sons.get(p.sample_num)
         if s is None or not s.data:
             continue
+        if potards:
+            s = _appliquer_potards(s, p, rate)
+            if not s.data:
+                continue
         niveau = max(0.0, min(1.0, p.level / 127.0))
         data = s.data[::-1] if p.actif("reverse") else s.data
         for i in range(NB_PAS):
             if not p.pas_actif(i):
                 continue
-            d = int((offset_pas + i) * par_pas * rate)
+            retard = decalage if i % 2 else 0.0
+            d = int(((offset_pas + i) * par_pas + retard) * rate)
             for j, v in enumerate(data):
                 k = d + j
                 if k >= len(melange):
@@ -291,7 +379,7 @@ def queue_max(sons):
     return max((len(s.data) for s in sons.values() if s), default=0)
 
 
-def rendu(motif, sons, bpm=120.0, rate=None):
+def rendu(motif, sons, bpm=120.0, rate=None, swing=0.5, potards=True):
     """Fabrique l'audio d'un pattern, pour l'ecouter avant de l'envoyer.
 
     motif : le Motif a jouer
@@ -307,8 +395,8 @@ def rendu(motif, sons, bpm=120.0, rate=None):
     if total <= 0:
         return audio.Sample([], rate, motif.nom)
 
-    melange = [0.0] * (total + queue_max(sons))
-    poser(melange, motif, sons, rate, par_pas, 0)
+    melange = [0.0] * (total + queue_max(sons) * 2)
+    poser(melange, motif, sons, rate, par_pas, 0, swing, potards)
 
     out = audio.Sample(melange, rate, motif.nom)
     crete = out.peak()
