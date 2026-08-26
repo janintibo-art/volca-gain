@@ -45,8 +45,9 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
-from volca import (__version__, audio, batch, etat, kit, librarian,
-                   morceau, pattern, project, reglages, syro, tips)
+from volca import (__version__, audio, batch, bibliotheque, etat, kit,
+                   librarian, morceau, pattern, project, reglages, syro,
+                   tips)
 
 # ---------------------------------------------------------------- palette
 FOND = (0.055, 0.055, 0.07, 1)
@@ -3314,6 +3315,289 @@ class EcranMorceau(BoxLayout):
             self.journal("Lecture impossible : %s" % e)
 
 
+class EcranBibliotheque(BoxLayout):
+    """Une reserve de patterns et de sons, sans limite de nombre.
+
+    Rien a voir avec les slots de la machine : ici on garde tout, avec un
+    nom, pour piocher au moment de monter un kit ou un morceau.
+    """
+
+    def __init__(self, journal, get_slots, get_pattern, get_morceau, **kw):
+        super().__init__(orientation="vertical", spacing=dp(6), **kw)
+        self.journal = journal
+        self.get_slots = get_slots
+        self.get_pattern = get_pattern
+        self.get_morceau = get_morceau
+        self.bib = bibliotheque.ouvrir(dossier_travail())
+        self.genre = "patterns"
+        self.filtre = ""
+        self.busy = False
+
+        page = ScrollView(do_scroll_x=False)
+        corps = BoxLayout(orientation="vertical", spacing=dp(6),
+                          size_hint_y=None, padding=(0, 0, 0, dp(6)))
+        corps.bind(minimum_height=corps.setter("height"))
+        page.add_widget(corps)
+        BoxLayout.add_widget(self, page)
+        self.corps = corps
+
+        self.lbl_etat = Label(text="", size_hint_y=None, height=dp(26),
+                              font_size=dp(12), color=TEXTE)
+        corps.add_widget(self.lbl_etat)
+
+        r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        self.spin_genre = Choix(text="Patterns", values=["Patterns", "Sons"],
+                                size_hint_x=0.45)
+        self.spin_genre.bind(text=self._changer_genre)
+        r0.add_widget(self.spin_genre)
+        self.spin_tri = Choix(text="nom", values=["nom", "date"],
+                              size_hint_x=0.3)
+        self.spin_tri.bind(text=lambda *_: self.rafraichir())
+        r0.add_widget(self.spin_tri)
+        corps.add_widget(r0)
+
+        r1 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        self.champ = TextInput(hint_text="chercher un nom", multiline=False,
+                               font_size=dp(13))
+        self.champ.bind(text=self._chercher)
+        r1.add_widget(self.champ)
+        b_x = Bouton(text="X", size_hint_x=0.16, font_size=dp(13))
+        b_x.bind(on_release=lambda *_: setattr(self.champ, "text", ""))
+        r1.add_widget(b_x)
+        corps.add_widget(r1)
+
+        cadre = Panneau(orientation="vertical", size_hint_y=None,
+                        height=dp(260), padding=dp(6))
+        sv = ScrollView(do_scroll_x=False)
+        self.liste = BoxLayout(orientation="vertical", spacing=dp(3),
+                               size_hint_y=None)
+        self.liste.bind(minimum_height=self.liste.setter("height"))
+        sv.add_widget(self.liste)
+        cadre.add_widget(sv)
+        corps.add_widget(cadre)
+
+        r2 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        b_p = Bouton(text="+ Pattern courant", couleur=ORANGE,
+                     font_size=dp(12))
+        b_p.bind(on_release=lambda *_: self.ranger_pattern())
+        r2.add_widget(b_p)
+        b_s = Bouton(text="+ Sons d'un dossier", couleur=CYAN,
+                     font_size=dp(12))
+        b_s.bind(on_release=lambda *_: Chooser(
+            self.ranger_dossier, dossiers=True).open())
+        r2.add_widget(b_s)
+        corps.add_widget(r2)
+
+        r3 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        b_slots = Bouton(text="+ Sons des slots remplis", font_size=dp(12))
+        b_slots.bind(on_release=lambda *_: self.ranger_slots())
+        r3.add_widget(b_slots)
+        corps.add_widget(r3)
+
+        self.rafraichir()
+
+    # ------------------------------------------------------------ liste
+    def _changer_genre(self, _sp, txt):
+        self.genre = "patterns" if txt == "Patterns" else "sons"
+        self.rafraichir()
+
+    def _chercher(self, _w, txt):
+        self.filtre = txt
+        self.rafraichir()
+
+    def rafraichir(self):
+        self.liste.clear_widgets()
+        entrees = self.bib.lister(self.genre, self.filtre,
+                                  self.spin_tri.text)
+        for e in entrees:
+            self.liste.add_widget(self._ligne(e))
+        if not entrees:
+            self.liste.add_widget(Label(
+                text="Rien ici. Range un pattern ou des sons.",
+                size_hint_y=None, height=dp(46), font_size=dp(12),
+                color=TEXTE_2))
+        c = self.bib.compte()
+        self.lbl_etat.text = "%d pattern(s), %d son(s), %.1f Mo" % (
+            c["patterns"], c["sons"],
+            self.bib.taille_octets() / 1048576.0)
+
+    def _ligne(self, e):
+        ligne = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(3))
+        if self.genre == "patterns":
+            detail = "%d partie(s)" % e.get("parties", 0)
+            if e.get("motions"):
+                detail += "  motions"
+        else:
+            detail = "%.0f ms  RMS %.1f" % (e.get("duree_ms", 0),
+                                            e.get("rms_db", 0))
+        bloc = BoxLayout(orientation="vertical", size_hint_x=0.44)
+        bloc.add_widget(Label(text=e["nom"][:22], font_size=dp(12),
+                              color=TEXTE, shorten=True))
+        bloc.add_widget(Label(text=detail, font_size=dp(10), color=TEXTE_2))
+        ligne.add_widget(bloc)
+
+        if self.genre == "patterns":
+            b1 = Bouton(text="Ouvrir", font_size=dp(10), couleur=ORANGE_S,
+                        size_hint_x=0.2)
+            b1.bind(on_release=lambda w, x=e: self.ouvrir_pattern(x))
+            b2 = Bouton(text="+Morc", font_size=dp(10), size_hint_x=0.18)
+            b2.bind(on_release=lambda w, x=e: self.vers_morceau(x))
+        else:
+            b1 = Bouton(text="> Lire", font_size=dp(10), couleur=VERT,
+                        size_hint_x=0.2)
+            b1.bind(on_release=lambda w, x=e: self.ecouter(x))
+            b2 = Bouton(text="+Slot", font_size=dp(10), size_hint_x=0.18)
+            b2.bind(on_release=lambda w, x=e: self.vers_slot(x))
+        ligne.add_widget(b1)
+        ligne.add_widget(b2)
+
+        b3 = Bouton(text="Nom", font_size=dp(10), size_hint_x=0.16)
+        b3.bind(on_release=lambda w, x=e: NomPopup(
+            "Renommer", x["nom"], lambda n: self._renommer(x, n)).open())
+        ligne.add_widget(b3)
+        b4 = Bouton(text="X", font_size=dp(11), size_hint_x=0.12,
+                    couleur=ORANGE_S)
+        b4.bind(on_release=lambda w, x=e: self._supprimer(x))
+        ligne.add_widget(b4)
+        return ligne
+
+    def _renommer(self, entree, nom):
+        try:
+            self.bib.renommer(self.genre, entree, nom)
+            self.rafraichir()
+        except Exception as ex:  # noqa: BLE001
+            self.journal("Renommage impossible : %s" % ex)
+
+    def _supprimer(self, entree):
+        self.bib.supprimer(self.genre, entree)
+        self.journal("Retire de la bibliotheque : %s" % entree["nom"])
+        self.rafraichir()
+
+    # ------------------------------------------------------------ ranger
+    def ranger_pattern(self):
+        motif = self.get_pattern().motif
+        if not motif.parties_utilisees():
+            self.journal("Le pattern de l'onglet PATT. est vide.")
+            return
+        NomPopup("Nom du pattern", motif.nom, self._faire_ranger).open()
+
+    def _faire_ranger(self, nom):
+        try:
+            copie = pattern.Motif.from_bytes(
+                self.get_pattern().motif.to_bytes(), nom)
+            self.bib.ajouter_pattern(copie, nom)
+            self.spin_genre.text = "Patterns"
+            self.journal("Range : %s" % nom)
+            self.rafraichir()
+        except Exception as e:  # noqa: BLE001
+            self.journal("Rangement impossible : %s" % e)
+
+    def ranger_dossier(self, dossier):
+        if self.busy:
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_dossier, args=(dossier,),
+                         daemon=True).start()
+
+    def _worker_dossier(self, dossier):
+        try:
+            fichiers = batch.list_wavs(dossier)
+            if not fichiers:
+                self.journal("Aucun WAV dans ce dossier.")
+                return
+            self.journal("--- RANGEMENT DE %d SON(S) ---" % len(fichiers))
+            for n, f in enumerate(fichiers, 1):
+                try:
+                    e = self.bib.ajouter_son(f)
+                    self.journal("  %-22s %5.0f ms" % (e["nom"][:22],
+                                                       e["duree_ms"]))
+                except Exception as ex:  # noqa: BLE001
+                    self.journal("  %s : %s" % (os.path.basename(f), ex))
+            self._apres()
+        except Exception as e:  # noqa: BLE001
+            self.journal("Rangement impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    def ranger_slots(self):
+        """Met a l'abri les sons deja places dans les slots."""
+        if self.busy:
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_slots, daemon=True).start()
+
+    def _worker_slots(self):
+        try:
+            projet = self.get_slots().projet
+            occupes = projet.occupes()
+            if not occupes:
+                self.journal("Aucun slot rempli.")
+                return
+            self.journal("--- RANGEMENT DE %d SLOT(S) ---" % len(occupes))
+            for slot in occupes:
+                try:
+                    e = self.bib.ajouter_son(slot.chemin, slot.nom)
+                    self.journal("  %3d  %s" % (slot.index, e["nom"][:22]))
+                except Exception as ex:  # noqa: BLE001
+                    self.journal("  %3d  ECHEC %s" % (slot.index, ex))
+            self._apres()
+        except Exception as e:  # noqa: BLE001
+            self.journal("Rangement impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    @mainthread
+    def _apres(self):
+        self.spin_genre.text = "Sons"
+        self.rafraichir()
+
+    # ------------------------------------------------------------ usage
+    def ouvrir_pattern(self, entree):
+        try:
+            ecran = self.get_pattern()
+            ecran.motif = self.bib.motif(entree)
+            ecran.spin_partie.text = "1"
+            ecran.partie = 1
+            ecran.sl_sample.value = ecran._p().sample_num
+            ecran.sl_niveau.value = ecran._p().level
+            ecran.rafraichir()
+            self.journal("Ouvert dans PATT. : %s" % entree["nom"])
+        except Exception as e:  # noqa: BLE001
+            self.journal("Ouverture impossible : %s" % e)
+
+    def vers_morceau(self, entree):
+        try:
+            ecran = self.get_morceau()
+            ecran.morceau.ajouter(self.bib.motif(entree), 1, entree["nom"])
+            ecran.rafraichir()
+            self.journal("Ajoute au morceau : %s" % entree["nom"])
+        except Exception as e:  # noqa: BLE001
+            self.journal("Ajout impossible : %s" % e)
+
+    def ecouter(self, entree):
+        try:
+            jouer_sample(self.bib.son(entree), "bibli")
+            self.journal("%s : %.0f ms" % (entree["nom"],
+                                           entree["duree_ms"]))
+        except Exception as e:  # noqa: BLE001
+            self.journal("Lecture impossible : %s" % e)
+
+    def vers_slot(self, entree):
+        ecran = self.get_slots()
+        ChoixSlot(ecran.projet,
+                  lambda i: self._poser_slot(ecran, entree, i)).open()
+
+    def _poser_slot(self, ecran, entree, index):
+        try:
+            ecran.projet.assigner(index, self.bib.chemin_son(entree),
+                                  "doux", 0.0)
+            ecran.projet.renommer(index, entree["nom"])
+            ecran.rafraichir()
+            self.journal("Slot %d <- %s" % (index, entree["nom"]))
+        except Exception as e:  # noqa: BLE001
+            self.journal("Placement impossible : %s" % e)
+
+
 class EcranTuto(BoxLayout):
     def __init__(self, **kw):
         super().__init__(orientation="vertical", spacing=dp(6), **kw)
@@ -3344,7 +3628,8 @@ class EcranTuto(BoxLayout):
 
 # --------------------------------------------------------------------------
 class Root(BoxLayout):
-    ONGLETS = ("TRAIT.", "SLOTS", "EDIT.", "PATT.", "MORC.", "TUTO")
+    ONGLETS = ("TRAIT.", "SLOTS", "EDIT.", "PATT.", "MORC.", "BIBLI.",
+               "TUTO")
 
     def __init__(self, **kw):
         super().__init__(orientation="vertical", spacing=dp(6),
@@ -3367,7 +3652,7 @@ class Root(BoxLayout):
         barre = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(4))
         self.tabs = []
         for i, nom in enumerate(self.ONGLETS):
-            b = Bouton(text=nom, font_size=dp(10), rayon=6)
+            b = Bouton(text=nom, font_size=dp(9), rayon=6)
             b.bind(on_release=lambda w, idx=i: self.afficher(idx))
             self.tabs.append(b)
             barre.add_widget(b)
@@ -3395,6 +3680,9 @@ class Root(BoxLayout):
             ("PATT.", EcranPattern, (self.journal, lambda: self.ec_slots)),
             ("MORC.", EcranMorceau, (self.journal, lambda: self.ec_slots,
                                      lambda: self.ecrans[3])),
+            ("BIBLI.", EcranBibliotheque,
+             (self.journal, lambda: self.ec_slots, lambda: self.ecrans[3],
+              lambda: self.ecrans[4])),
             ("TUTO", EcranTuto, ()),
         ]
         self.ecrans = []
