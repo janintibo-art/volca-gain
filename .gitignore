@@ -19,3 +19,6 @@ native/prebuilt/**/*.dll
 *.volca.json
 transfert.wav
 effacement.wav
+
+# patterns d usine copies depuis le SDK
+patterns/
