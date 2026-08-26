@@ -53,6 +53,28 @@ BIT_MUTE = 4
 FONCTIONS = {"motion": BIT_MOTION, "loop": BIT_LOOP, "reverb": BIT_REVERB,
              "reverse": BIT_REVERSE, "mute": BIT_MUTE}
 
+# --------------------------------------------------------------------------
+# Motions : 14 pistes de 16 pas, une valeur de potard par pas.
+#
+# Le SDK nomme les pistes LEVEL_0/LEVEL_1, PAN_0/PAN_1, SPEED_0/SPEED_1,
+# puis une seule piste pour chacun des autres potards. Les paires sont
+# tres probablement les deux octets d'une valeur 16 bits, l'octet fort
+# etant le second : c'est coherent avec le champ Level des sauvegardes
+# Korg, qui vaut 65535 a fond.
+#
+# On expose donc a l'utilisateur une valeur de 0 a 127, comme sur les
+# potards, et on ecrit dans l'octet fort. L'echelle exacte n'est pas
+# documentee par Korg : c'est une interpretation, pas une certitude.
+PISTES_MOTION = {
+    "level": 1, "pan": 3, "speed": 5,
+    "ampeg_attack": 6, "ampeg_decay": 7,
+    "pitcheg_int": 8, "pitcheg_attack": 9, "pitcheg_decay": 10,
+    "start_point": 11, "length": 12, "hicut": 13,
+}
+
+# Pistes de poids faible, laissees a zero.
+PISTES_BASSES = {"level": 0, "pan": 2, "speed": 4}
+
 # Valeurs de depart d'une partie neuve.
 # Elles paraissent neutres a l'oreille, mais elles ne sont PAS forcement
 # celles de VolcaSample_Pattern_Init du SDK : pour coller exactement a
@@ -79,7 +101,7 @@ class Partie:
         self.level = 127
         self.params = dict(DEFAUTS)
         self.func = 0
-        self.motion = [[0] * NB_PAS for _ in range(NB_MOTION)]
+        self.motion_brute = [[0] * NB_PAS for _ in range(NB_MOTION)]
 
     # ------------------------------------------------------------ pas
     def pas_actif(self, i):
@@ -125,6 +147,65 @@ class Partie:
     def fonctions_actives(self):
         return [n for n in FONCTIONS if self.actif(n)]
 
+    # ------------------------------------------------------------ motions
+    @staticmethod
+    def _piste(param):
+        if param not in PISTES_MOTION:
+            raise ValueError("parametre sans motion : %s" % param)
+        return PISTES_MOTION[param]
+
+    def motion(self, param, pas):
+        """Valeur de motion d'un pas, ramenee sur 0 a 127."""
+        octet = self.motion_brute[self._piste(param)][pas]
+        return int(round(octet * 127.0 / 255.0))
+
+    def mettre_motion(self, param, pas, valeur):
+        if not 0 <= pas < NB_PAS:
+            raise ValueError("pas hors limites : %d" % pas)
+        v = max(0, min(127, int(valeur)))
+        self.motion_brute[self._piste(param)][pas] = \
+            int(round(v * 255.0 / 127.0))
+        if param in PISTES_BASSES:
+            self.motion_brute[PISTES_BASSES[param]][pas] = 0
+        self.mettre("motion", True)
+        return self
+
+    def courbe_motion(self, param):
+        """Les 16 valeurs d'un parametre, sur 0 a 127."""
+        piste = self.motion_brute[self._piste(param)]
+        return [int(round(o * 127.0 / 255.0)) for o in piste]
+
+    def a_motion(self, param=None):
+        """Y a-t-il au moins une valeur non nulle ?"""
+        if param is not None:
+            return any(self.motion_brute[self._piste(param)])
+        return any(any(p) for p in self.motion_brute)
+
+    def params_motion(self):
+        return [p for p in PISTES_MOTION if self.a_motion(p)]
+
+    def effacer_motion(self, param=None):
+        if param is None:
+            self.motion_brute = [[0] * NB_PAS for _ in range(NB_MOTION)]
+            self.mettre("motion", False)
+            return self
+        for piste in (self._piste(param), PISTES_BASSES.get(param)):
+            if piste is not None:
+                self.motion_brute[piste] = [0] * NB_PAS
+        if not self.a_motion():
+            self.mettre("motion", False)
+        return self
+
+    def params_au_pas(self, pas):
+        """Les potards effectifs a ce pas : la motion prend le dessus."""
+        effectifs = dict(self.params)
+        if not self.actif("motion"):
+            return effectifs
+        for param in PISTES_MOTION:
+            if self.a_motion(param):
+                effectifs[param] = self.motion(param, pas)
+        return effectifs
+
     # ------------------------------------------------------------ binaire
     def to_bytes(self):
         out = struct.pack("<HHHH", self.sample_num & 0xFFFF,
@@ -134,7 +215,7 @@ class Partie:
                      for p in PARAMS)
         out += bytes([self.func & 0xFF])
         out += bytes(11)
-        for piste in self.motion:
+        for piste in self.motion_brute:
             out += bytes(v & 0xFF for v in piste)
         if len(out) != TAILLE_PARTIE:
             raise FormatInvalide("partie de %d octets au lieu de %d"
@@ -151,8 +232,9 @@ class Partie:
         p.params = {nom: brut[9 + i] for i, nom in enumerate(PARAMS)}
         p.func = brut[9 + NB_PARAM]
         base = 32
-        p.motion = [list(brut[base + i * NB_PAS: base + (i + 1) * NB_PAS])
-                    for i in range(NB_MOTION)]
+        p.motion_brute = [list(brut[base + i * NB_PAS:
+                                    base + (i + 1) * NB_PAS])
+                          for i in range(NB_MOTION)]
         return p
 
     def resume(self):
@@ -256,7 +338,7 @@ class Motif:
 
 
 # --------------------------------------------------------------------------
-def _appliquer_potards(sample, p, rate):
+def _appliquer_potards(sample, par, rate):
     """Reproduit les potards de la partie sur un son.
 
     Ordre de la machine : on decoupe d'abord (point de depart, longueur),
@@ -267,7 +349,6 @@ def _appliquer_potards(sample, p, rate):
     exacte avec la machine n'est pas documentee : ce sont des courbes
     plausibles, pas une simulation certifiee.
     """
-    par = p.params
     d = list(sample.data)
     n = len(d)
     if n == 0:
@@ -354,14 +435,33 @@ def poser(melange, motif, sons, rate, par_pas, offset_pas=0, swing=0.5,
         s = sons.get(p.sample_num)
         if s is None or not s.data:
             continue
-        if potards:
-            s = _appliquer_potards(s, p, rate)
-            if not s.data:
-                continue
-        niveau = max(0.0, min(1.0, p.level / 127.0))
-        data = s.data[::-1] if p.actif("reverse") else s.data
+        # La motion change les potards a chaque pas : on prepare une
+        # version du son par jeu de reglages, et on la reutilise.
+        bouge = potards and p.actif("motion") and p.a_motion()
+        cache = {}
+
+        def prepare(reglages):
+            cle = tuple(sorted(reglages.items()))
+            if cle not in cache:
+                v = _appliquer_potards(s, reglages, rate) if potards else s
+                cache[cle] = v.data[::-1] if p.actif("reverse") else v.data
+            return cache[cle]
+
+        fixe = None if bouge else prepare(p.params)
+        base_niveau = max(0.0, min(1.0, p.level / 127.0))
+
         for i in range(NB_PAS):
             if not p.pas_actif(i):
+                continue
+            if bouge:
+                reglages = p.params_au_pas(i)
+                data = prepare(reglages)
+                niveau = max(0.0, min(1.0, reglages.get("level", p.level)
+                                      / 127.0))
+            else:
+                data = fixe
+                niveau = base_niveau
+            if not data:
                 continue
             retard = decalage if i % 2 else 0.0
             d = int(((offset_pas + i) * par_pas + retard) * rate)

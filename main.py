@@ -999,6 +999,132 @@ class ChoixNombre(Popup):
         self.callback(v)
 
 
+class MotionPopup(Popup):
+    """Automation d'un potard sur les 16 pas.
+
+    Un pas a la fois : on choisit le pas, on regle la valeur. Seize
+    curseurs cote a cote seraient inutilisables sur un telephone.
+    """
+
+    def __init__(self, partie, numero, on_change, **kw):
+        super().__init__(title="Partie %d : motions" % numero,
+                         size_hint=(0.96, 0.9), **kw)
+        self.partie = partie
+        self.on_change = on_change
+        self.param = "hicut"
+        self.pas = 0
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        r0.add_widget(Label(text="Potard", size_hint_x=0.28, color=TEXTE,
+                            font_size=dp(12)))
+        self.spin = Choix(text=self.param,
+                          values=sorted(pattern.PISTES_MOTION))
+        self.spin.bind(text=self._changer_param)
+        r0.add_widget(self.spin)
+        box.add_widget(r0)
+
+        cadre = Panneau(orientation="vertical", size_hint_y=None,
+                        height=dp(130), padding=dp(6), spacing=dp(4))
+        self.cases = []
+        for rangee in range(2):
+            ligne = BoxLayout(spacing=dp(3))
+            for col in range(8):
+                i = rangee * 8 + col
+                b = Bouton(text="-", font_size=dp(10), rayon=5)
+                b.bind(on_release=lambda w, k=i: self._choisir_pas(k))
+                self.cases.append(b)
+                ligne.add_widget(b)
+            cadre.add_widget(ligne)
+        box.add_widget(cadre)
+
+        r1 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        self.lbl = Label(text="", size_hint_x=0.45, color=TEXTE,
+                         font_size=dp(12))
+        r1.add_widget(self.lbl)
+        self.sl = Slider(min=0, max=127, step=1, value=64)
+        self.sl.bind(value=self._changer_valeur)
+        r1.add_widget(self.sl)
+        box.add_widget(r1)
+
+        r2 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        for txt, fn in (("Rampe", self._rampe),
+                        ("Effacer ce potard", self._effacer_param),
+                        ("Tout effacer", self._effacer_tout)):
+            b = Bouton(text=txt, font_size=dp(11))
+            b.bind(on_release=lambda w, f=fn: f())
+            r2.add_widget(b)
+        box.add_widget(r2)
+
+        self.lbl_etat = Label(text="", size_hint_y=None, height=dp(40),
+                              font_size=dp(11), color=TEXTE_2)
+        box.add_widget(self.lbl_etat)
+
+        b_ok = Bouton(text="Fermer", couleur=VERT, size_hint_y=None,
+                      height=dp(46))
+        b_ok.bind(on_release=self._fermer)
+        box.add_widget(b_ok)
+        self.add_widget(box)
+        self.rafraichir()
+
+    # ------------------------------------------------------------ etat
+    def rafraichir(self):
+        courbe = self.partie.courbe_motion(self.param)
+        actif = self.partie.a_motion(self.param)
+        for i, b in enumerate(self.cases):
+            v = courbe[i]
+            b.text = str(v) if (actif and v) else "-"
+            if i == self.pas:
+                b.set_couleur(ORANGE)
+            elif actif and v:
+                b.set_couleur(ORANGE_S)
+            else:
+                b.set_couleur(GRIS if i % 4 else GRIS_CHOIX)
+        self.lbl.text = "Pas %d : %d" % (self.pas + 1, courbe[self.pas])
+        self.sl.value = courbe[self.pas]
+        utilises = self.partie.params_motion()
+        self.lbl_etat.text = ("Potards automatises : %s"
+                              % (", ".join(utilises) if utilises else "aucun"))
+
+    def _changer_param(self, _sp, txt):
+        self.param = txt
+        self.rafraichir()
+
+    def _choisir_pas(self, i):
+        self.pas = i
+        self.rafraichir()
+
+    def _changer_valeur(self, _sl, v):
+        self.partie.mettre_motion(self.param, self.pas, int(v))
+        self.lbl.text = "Pas %d : %d" % (self.pas + 1, int(v))
+        self.cases[self.pas].text = str(int(v))
+
+    def _rampe(self):
+        """Remplit les 16 pas d'une pente, du pas courant vers la fin."""
+        depart = self.partie.courbe_motion(self.param)[self.pas]
+        fin = 0 if depart > 63 else 127
+        n = pattern.NB_PAS - 1
+        for i in range(pattern.NB_PAS):
+            f = i / float(n)
+            self.partie.mettre_motion(self.param, i,
+                                      depart + (fin - depart) * f)
+        self.rafraichir()
+
+    def _effacer_param(self):
+        self.partie.effacer_motion(self.param)
+        self.rafraichir()
+
+    def _effacer_tout(self):
+        self.partie.effacer_motion()
+        self.rafraichir()
+
+    def _fermer(self, *_):
+        self.dismiss()
+        if self.on_change:
+            self.on_change()
+
+
 class ChoixProgramme(Popup):
     """Liste les programmes d'une sauvegarde Korg."""
 
@@ -2367,6 +2493,11 @@ class EcranPattern(BoxLayout):
         b_par.bind(on_release=lambda *_: ParamsPartie(
             self._p(), self.partie, self.rafraichir).open())
         r_par.add_widget(b_par)
+        b_mot = Bouton(text="Motions", size_hint_x=0.55, font_size=dp(12),
+                       couleur=CYAN)
+        b_mot.bind(on_release=lambda *_: MotionPopup(
+            self._p(), self.partie, self.rafraichir).open())
+        r_par.add_widget(b_mot)
         b_copie = Bouton(text="Copier vers", size_hint_x=0.5, font_size=dp(12))
         b_copie.bind(on_release=lambda *_: self._copier_partie())
         r_par.add_widget(b_copie)
@@ -2467,11 +2598,14 @@ class EcranPattern(BoxLayout):
                 b.set_couleur(GRIS if i % 4 else ORANGE_S)
         for nom, b in self.b_fonc.items():
             b.set_couleur(CYAN if p.actif(nom) else GRIS)
+        if hasattr(self, "lbl_etat"):
+            mot = p.params_motion()
+            self.lbl_etat.text = "%s - %d partie(s) utilisee(s)%s" % (
+                self.motif.nom, len(self.motif.parties_utilisees()),
+                ("  motions : " + ", ".join(mot)) if mot else "")
         self.lbl_sample.text = "Sample %d" % p.sample_num
         self.lbl_niveau.text = "Niveau %d" % p.level
-        utilisees = len(self.motif.parties_utilisees())
-        self.lbl_etat.text = "%s - %d partie(s) utilisee(s)" % (
-            self.motif.nom, utilisees)
+
 
     # ------------------------------------------------------------ edition
     def _changer_partie(self, _sp, txt):
@@ -2509,6 +2643,7 @@ class EcranPattern(BoxLayout):
             dst.level = src.level
             dst.func = src.func
             dst.params = dict(src.params)
+            dst.motion_brute = [list(p) for p in src.motion_brute]
             self.journal("Partie %d copiee vers %d" % (self.partie, numero))
             self.rafraichir()
 

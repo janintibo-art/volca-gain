@@ -98,7 +98,7 @@ class TestAllerRetour(unittest.TestCase):
         self.m.partie(3).params["speed"] = 80
         self.m.partie(3).level = 100
         self.m.partie(3).depuis_liste([2])
-        self.m.parties[4].motion[3][7] = 99
+        self.m.parties[4].motion_brute[3][7] = 99
 
     def test_octets_identiques(self):
         r = pattern.Motif.from_bytes(self.m.to_bytes())
@@ -111,7 +111,7 @@ class TestAllerRetour(unittest.TestCase):
         self.assertTrue(r.partie(2).actif("reverse"))
         self.assertEqual(r.partie(3).params["speed"], 80)
         self.assertEqual(r.partie(3).level, 100)
-        self.assertEqual(r.parties[4].motion[3][7], 99)
+        self.assertEqual(r.parties[4].motion_brute[3][7], 99)
 
     def test_fichier(self):
         tmp = tempfile.mkdtemp()
@@ -363,3 +363,127 @@ class TestSwing(unittest.TestCase):
     def test_swing_borne(self):
         loin = self._attaques(0.99)
         self.assertLess(loin[1], 0.25)
+
+
+class TestMotions(unittest.TestCase):
+    """Automation des potards, 14 pistes de 16 pas."""
+
+    def setUp(self):
+        self.p = pattern.Partie()
+        self.p.params.update(pattern.DEFAUTS)
+
+    def test_vierge(self):
+        self.assertFalse(self.p.a_motion())
+        self.assertEqual(self.p.params_motion(), [])
+        self.assertFalse(self.p.actif("motion"))
+
+    def test_ecrire_et_relire(self):
+        self.p.mettre_motion("hicut", 3, 100)
+        self.assertEqual(self.p.motion("hicut", 3), 100)
+        self.assertTrue(self.p.a_motion("hicut"))
+        self.assertTrue(self.p.actif("motion"))
+
+    def test_courbe(self):
+        self.p.mettre_motion("length", 0, 127)
+        self.p.mettre_motion("length", 8, 40)
+        c = self.p.courbe_motion("length")
+        self.assertEqual(len(c), 16)
+        self.assertEqual(c[0], 127)
+        self.assertEqual(c[8], 40)
+        self.assertEqual(c[1], 0)
+
+    def test_bornes(self):
+        self.p.mettre_motion("hicut", 0, 999)
+        self.assertEqual(self.p.motion("hicut", 0), 127)
+        self.p.mettre_motion("hicut", 0, -5)
+        self.assertEqual(self.p.motion("hicut", 0), 0)
+
+    def test_pas_hors_limites(self):
+        with self.assertRaises(ValueError):
+            self.p.mettre_motion("hicut", 16, 50)
+
+    def test_parametre_inconnu(self):
+        with self.assertRaises(ValueError):
+            self.p.mettre_motion("reverb", 0, 50)
+
+    def test_params_au_pas(self):
+        self.p.params["hicut"] = 127
+        self.p.mettre_motion("hicut", 5, 30)
+        self.assertEqual(self.p.params_au_pas(5)["hicut"], 30)
+        self.assertEqual(self.p.params_au_pas(0)["hicut"], 0)
+
+    def test_motion_desactivee_ignoree(self):
+        self.p.params["hicut"] = 127
+        self.p.mettre_motion("hicut", 5, 30)
+        self.p.mettre("motion", False)
+        self.assertEqual(self.p.params_au_pas(5)["hicut"], 127)
+
+    def test_effacer_un_parametre(self):
+        self.p.mettre_motion("hicut", 0, 50)
+        self.p.mettre_motion("length", 0, 50)
+        self.p.effacer_motion("hicut")
+        self.assertFalse(self.p.a_motion("hicut"))
+        self.assertTrue(self.p.a_motion("length"))
+        self.assertTrue(self.p.actif("motion"))
+
+    def test_effacer_tout(self):
+        self.p.mettre_motion("hicut", 0, 50)
+        self.p.effacer_motion()
+        self.assertFalse(self.p.a_motion())
+        self.assertFalse(self.p.actif("motion"))
+
+    def test_survit_au_binaire(self):
+        for i, v in ((0, 127), (7, 60), (15, 10)):
+            self.p.mettre_motion("speed", i, v)
+        q = pattern.Partie.from_bytes(self.p.to_bytes())
+        self.assertEqual(q.courbe_motion("speed"),
+                         self.p.courbe_motion("speed"))
+        self.assertTrue(q.actif("motion"))
+
+    def test_motions_preservees_dans_un_pattern(self):
+        m = pattern.vierge("t")
+        m.partie(1).mettre_motion("hicut", 4, 90)
+        r = pattern.Motif.from_bytes(m.to_bytes())
+        self.assertEqual(r.partie(1).motion("hicut", 4), 90)
+
+
+class TestRenduMotions(unittest.TestCase):
+    def setUp(self):
+        import math as _m
+        from volca import audio
+        n = int(44100 * 0.25)
+        self.sons = {3: audio.Sample(
+            [0.4 * _m.sin(2 * _m.pi * 300 * i / 44100) for i in range(n)],
+            44100)}
+        self.m = pattern.vierge("t")
+        self.p = self.m.partie(1)
+        self.p.sample_num = 3
+        self.p.depuis_liste([1, 5, 9, 13])
+        self.p.params.update(pattern.DEFAUTS)
+
+    def _cretes(self):
+        r = pattern.rendu(self.m, self.sons, 120, normaliser=False)
+        out = []
+        for t in (0.0, 0.5, 1.0, 1.5):
+            i = int(44100 * t)
+            out.append(max(abs(v) for v in r.data[i:i + 2000]))
+        return out
+
+    def test_motion_de_niveau_decroissante(self):
+        for i, v in ((0, 127), (4, 80), (8, 50), (12, 20)):
+            self.p.mettre_motion("level", i, v)
+        c = self._cretes()
+        self.assertGreater(c[0], c[1])
+        self.assertGreater(c[1], c[2])
+        self.assertGreater(c[2], c[3])
+
+    def test_sans_motion_les_frappes_sont_egales(self):
+        c = self._cretes()
+        self.assertAlmostEqual(c[0], c[3], delta=0.01)
+
+    def test_motion_change_le_rendu(self):
+        sans = pattern.rendu(self.m, self.sons, 120).rms_db()
+        for i in range(16):
+            self.p.mettre_motion("hicut", i, 10 + i * 5)
+        avec = pattern.rendu(self.m, self.sons, 120).rms_db()
+        self.assertNotAlmostEqual(sans, avec, places=1)
