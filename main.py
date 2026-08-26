@@ -2757,9 +2757,13 @@ class EcranMorceau(BoxLayout):
         b_st = Bouton(text="Stop", size_hint_x=0.4, font_size=dp(12))
         b_st.bind(on_release=lambda *_: arreter_lecture())
         r2.add_widget(b_st)
-        b_ex = Bouton(text="Exporter WAV", couleur=CYAN, font_size=dp(12))
+        b_ex = Bouton(text="Export WAV", couleur=CYAN, font_size=dp(11))
         b_ex.bind(on_release=lambda *_: self.exporter())
         r2.add_widget(b_ex)
+        b_pi = Bouton(text="Pistes", couleur=CYAN, font_size=dp(11),
+                      size_hint_x=0.5)
+        b_pi.bind(on_release=lambda *_: self.exporter_pistes())
+        r2.add_widget(b_pi)
         corps.add_widget(r2)
 
         r_env = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
@@ -2965,6 +2969,40 @@ class EcranMorceau(BoxLayout):
             r = morceau.exporter_wav(self.morceau, sons, cible)
             self.journal("Exporte : %.1f s" % r["duree_s"])
             self.journal(r["chemin"])
+        except Exception as e:  # noqa: BLE001
+            self.journal("Export impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    def exporter_pistes(self):
+        if self.busy or not self.morceau.sections:
+            if not self.morceau.sections:
+                self.journal("Morceau vide.")
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_pistes, daemon=True).start()
+
+    def _worker_pistes(self):
+        """Une piste WAV par partie, plus le melange."""
+        try:
+            sons, _ = self._sons()
+            if not sons:
+                self.journal("Aucun son a exporter.")
+                return
+            dossier = os.path.join(dossier_travail(), "pistes",
+                                   morceau._nom_sur(self.morceau.nom))
+            self.journal("--- EXPORT EN PISTES ---")
+
+            def prog(n, total, nom):
+                self.journal("  [%d/%d] %s" % (n, total, nom))
+
+            ecrits = morceau.exporter_pistes(
+                self.morceau, sons, dossier,
+                self.get_slots().projet, prog)
+            self.journal("%d fichier(s) ecrits dans :" % len(ecrits))
+            self.journal(dossier)
+            self.journal("Meme gain sur toutes les pistes : leur equilibre "
+                         "est conserve pour le remixage.")
         except Exception as e:  # noqa: BLE001
             self.journal("Export impossible : %s" % e)
         finally:

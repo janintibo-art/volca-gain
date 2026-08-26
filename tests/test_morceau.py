@@ -242,3 +242,82 @@ class TestSlotsManquants(unittest.TestCase):
     def test_partie_muette_non_comptee(self):
         self.m.sections[0].motif.partie(2).mettre("mute")
         self.assertEqual(morceau.slots_manquants(self.m, self.p), [3])
+
+
+class TestPistes(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.sons = {3: son(80, 0.1), 7: son(900, 0.05)}
+        m = pattern.vierge("a")
+        m.partie(1).sample_num = 3
+        m.partie(1).depuis_liste([1, 5, 9, 13])
+        m.partie(2).sample_num = 7
+        m.partie(2).depuis_liste([5, 13])
+        self.m = morceau.Morceau("t", 120)
+        self.m.ajouter(m, 2)
+
+    def test_parties_actives_en_numerotation_musicale(self):
+        self.assertEqual(self.m.parties_actives(), [1, 2])
+
+    def test_partie_muette_exclue(self):
+        self.m.sections[0].motif.partie(2).mettre("mute")
+        self.assertEqual(self.m.parties_actives(), [1])
+
+    def test_filtre_par_partie(self):
+        p1 = self.m.rendu(self.sons, parties={1}, normaliser=False)
+        p2 = self.m.rendu(self.sons, parties={2}, normaliser=False)
+        plein = self.m.rendu(self.sons, normaliser=False)
+        self.assertGreater(p1.peak(), 0)
+        self.assertGreater(p2.peak(), 0)
+        self.assertGreaterEqual(plein.peak(), max(p1.peak(), p2.peak()))
+
+    def test_export_fichiers(self):
+        r = morceau.exporter_pistes(self.m, self.sons, self.tmp)
+        self.assertEqual(len(r), 3)
+        for e in r:
+            self.assertTrue(os.path.isfile(e["chemin"]))
+        noms = sorted(os.path.basename(e["chemin"]) for e in r)
+        self.assertTrue(noms[0].startswith("00_melange"))
+
+    def test_equilibre_conserve(self):
+        """Les pistes gardent leur rapport de niveau : une partie reglee
+        plus bas doit ressortir plus bas dans son fichier."""
+        self.m.sections[0].motif.partie(2).level = 32   # environ -12 dB
+        r = morceau.exporter_pistes(self.m, self.sons, self.tmp)
+        cretes = {e["partie"]: audio.read_wav(e["chemin"]).peak_db()
+                  for e in r if e["partie"]}
+        self.assertLess(cretes[2], cretes[1] - 8)
+
+    def test_pistes_non_normalisees_separement(self):
+        """Si chaque piste etait normalisee dans son coin, les deux
+        finiraient a la meme crete."""
+        self.m.sections[0].motif.partie(2).level = 32
+        r = morceau.exporter_pistes(self.m, self.sons, self.tmp)
+        cretes = [audio.read_wav(e["chemin"]).peak_db()
+                  for e in r if e["partie"]]
+        self.assertNotAlmostEqual(cretes[0], cretes[1], places=0)
+
+    def test_somme_des_pistes_egale_le_melange(self):
+        r = morceau.exporter_pistes(self.m, self.sons, self.tmp)
+        melange = audio.read_wav(
+            next(e["chemin"] for e in r if e["partie"] == 0))
+        pistes = [audio.read_wav(e["chemin"]) for e in r if e["partie"]]
+        n = min([len(melange.data)] + [len(p.data) for p in pistes])
+        ecart = max(abs(melange.data[i] - sum(p.data[i] for p in pistes))
+                    for i in range(0, n, 97))
+        self.assertLess(ecart, 0.01)
+
+    def test_nom_depuis_le_projet(self):
+        from volca import project
+        w = os.path.join(self.tmp, "s.wav")
+        audio.write_wav(w, son(220, 0.1))
+        p = project.Projet("k", "sample2")
+        p.assigner(3, w)
+        p.renommer(3, "Kick sub")
+        self.assertEqual(self.m.nom_partie(1, p), "Kick sub")
+
+    def test_morceau_sans_partie(self):
+        vide = morceau.Morceau("v")
+        vide.ajouter(pattern.vierge("rien"), 1)
+        with self.assertRaises(ValueError):
+            morceau.exporter_pistes(vide, self.sons, self.tmp)

@@ -129,8 +129,12 @@ class Morceau:
         return "\n".join(lignes)
 
     # ------------------------------------------------------------ audio
-    def rendu(self, sons, progression=None):
-        """Fabrique l'audio complet du morceau."""
+    def rendu(self, sons, progression=None, parties=None, normaliser=True):
+        """Fabrique l'audio du morceau.
+
+        parties : ensemble de numeros de partie (1 a 10) a inclure.
+                  None = toutes.
+        """
         rate = audio.TARGET_RATE
         par_pas = pattern.duree_pas(self.bpm)
         total = int(rate * par_pas * self.pas)
@@ -143,17 +147,39 @@ class Morceau:
         for s in self.sections:
             for _ in range(s.repetitions):
                 pattern.poser(melange, s.motif, sons, rate, par_pas, offset,
-                              self.swing)
+                              self.swing, True, parties)
                 offset += pattern.NB_PAS
                 n += 1
                 if progression:
                     progression(n, self.pas // pattern.NB_PAS, s.nom)
 
         out = audio.Sample(melange, rate, self.nom)
-        crete = out.peak()
-        if crete > 0:
-            audio.apply_gain(out, min(0.0, -1.0 - audio.lin_to_db(crete)))
+        if normaliser:
+            crete = out.peak()
+            if crete > 0:
+                audio.apply_gain(out, min(0.0, -1.0 - audio.lin_to_db(crete)))
         return out
+
+    def parties_actives(self):
+        """Numeros de partie qui jouent vraiment quelque part."""
+        out = set()
+        for s in self.sections:
+            for p in s.motif.parties_utilisees():
+                if not p.actif("mute"):
+                    out.add(p.numero + 1)
+        return sorted(out)
+
+    def nom_partie(self, numero, projet=None):
+        """Un libelle parlant : le nom du sample si on le connait."""
+        for s in self.sections:
+            p = s.motif.partie(numero)
+            if p.pas and not p.actif("mute"):
+                if projet is not None and p.sample_num < projet.nb_slots:
+                    slot = projet.slots[p.sample_num]
+                    if not slot.vide and slot.nom:
+                        return slot.nom
+                return "sample %d" % p.sample_num
+        return "partie %d" % numero
 
     # ------------------------------------------------------------ fichier
     def sauver(self, chemin=None):
@@ -254,6 +280,54 @@ def infos(chemin):
             "sections": len(m.sections),
             "duree_s": round(m.duree_s(), 1),
             "samples": m.samples_utilises()}
+
+
+def exporter_pistes(morceau, sons, dossier, projet=None, progression=None):
+    """Ecrit une piste WAV par partie, plus le melange complet.
+
+    Le gain est calcule UNE FOIS sur le melange et applique a toutes les
+    pistes : leur equilibre relatif est ainsi conserve. Si on normalisait
+    chaque piste separement, un charley discret deviendrait aussi fort
+    qu'un kick, et le remixage serait fausse.
+    """
+    os.makedirs(dossier, exist_ok=True)
+    actives = morceau.parties_actives()
+    if not actives:
+        raise ValueError("aucune partie a exporter")
+
+    total = len(actives) + 1
+    if progression:
+        progression(1, total, "melange")
+
+    melange = morceau.rendu(sons, normaliser=False)
+    crete = melange.peak()
+    gain = min(0.0, -1.0 - audio.lin_to_db(crete)) if crete > 0 else 0.0
+
+    ecrits = []
+    audio.apply_gain(melange, gain)
+    chemin = os.path.join(dossier, "00_melange.wav")
+    audio.write_wav(chemin, melange)
+    ecrits.append({"partie": 0, "nom": "melange", "chemin": chemin})
+
+    for n, numero in enumerate(actives, 2):
+        if progression:
+            progression(n, total, "partie %d" % numero)
+        piste = morceau.rendu(sons, parties={numero}, normaliser=False)
+        audio.apply_gain(piste, gain)
+        nom = _nom_sur(morceau.nom_partie(numero, projet))
+        chemin = os.path.join(dossier, "%02d_%s.wav" % (numero, nom))
+        audio.write_wav(chemin, piste)
+        ecrits.append({"partie": numero, "nom": nom, "chemin": chemin,
+                       "crete_db": round(piste.peak_db(), 1)})
+
+    return ecrits
+
+
+def _nom_sur(nom):
+    ok = ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+          "0123456789-_")
+    net = "".join(c if c in ok else "_" for c in nom).strip("_")
+    return net[:30] or "piste"
 
 
 def exporter_wav(morceau, sons, chemin, progression=None):

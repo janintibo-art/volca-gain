@@ -337,7 +337,7 @@ def _appliquer_potards(sample, p, rate):
 
 
 def poser(melange, motif, sons, rate, par_pas, offset_pas=0, swing=0.5,
-          potards=True):
+          potards=True, parties=None):
     """Mele un pattern dans un tampon deja alloue, a partir d'un pas donne.
 
     Sert a la fois pour l'ecoute d'un pattern seul et pour l'enchainement
@@ -347,6 +347,9 @@ def poser(melange, motif, sons, rate, par_pas, offset_pas=0, swing=0.5,
     decalage = max(0.0, min(0.35, swing - 0.5)) * 2.0 * par_pas
     for p in motif.parties_utilisees():
         if p.actif("mute"):
+            continue
+        # parties est en numerotation musicale, 1 a 10
+        if parties is not None and (p.numero + 1) not in parties:
             continue
         s = sons.get(p.sample_num)
         if s is None or not s.data:
@@ -379,7 +382,8 @@ def queue_max(sons):
     return max((len(s.data) for s in sons.values() if s), default=0)
 
 
-def rendu(motif, sons, bpm=120.0, rate=None, swing=0.5, potards=True):
+def rendu(motif, sons, bpm=120.0, rate=None, swing=0.5, potards=True,
+          parties=None, normaliser=True):
     """Fabrique l'audio d'un pattern, pour l'ecouter avant de l'envoyer.
 
     motif : le Motif a jouer
@@ -396,12 +400,13 @@ def rendu(motif, sons, bpm=120.0, rate=None, swing=0.5, potards=True):
         return audio.Sample([], rate, motif.nom)
 
     melange = [0.0] * (total + queue_max(sons) * 2)
-    poser(melange, motif, sons, rate, par_pas, 0, swing, potards)
+    poser(melange, motif, sons, rate, par_pas, 0, swing, potards, parties)
 
     out = audio.Sample(melange, rate, motif.nom)
-    crete = out.peak()
-    if crete > 0:
-        audio.apply_gain(out, min(0.0, -1.0 - audio.lin_to_db(crete)))
+    if normaliser:
+        crete = out.peak()
+        if crete > 0:
+            audio.apply_gain(out, min(0.0, -1.0 - audio.lin_to_db(crete)))
     return out
 
 
