@@ -189,25 +189,33 @@ RACCOURCIS_ANDROID = [
 def dossier_sortie(source):
     """Ou ecrire les fichiers traites.
 
-    Android interdit souvent de CREER un dossier dans un espace partage,
-    meme quand la lecture y est autorisee. On essaie a cote des sources,
-    puis on se rabat sur le dossier de l'application, ou l'ecriture est
-    toujours permise.
+    Sur Android, ecrire dans un espace partage est refuse meme quand la
+    lecture y est autorisee, et le refus ne se manifeste qu'au moment
+    d'ecrire un vrai fichier audio. On ecrit donc toujours dans le
+    dossier de l'application, sauf si la source y est deja.
+
+    Le sondage se fait avec un vrai .wav : un fichier sans extension
+    passe parfois la ou un audio est refuse.
     """
     base = os.path.basename(source.rstrip("/\\")) or "sortie"
-    essais = [os.path.join(source, "volca_out"),
-              os.path.join(dossier_travail(), "volca_out", base)]
+    interne = os.path.join(dossier_travail(), "volca_out", base)
+
+    essais = []
+    if not IS_ANDROID or source.startswith(dossier_travail()):
+        essais.append(os.path.join(source, "volca_out"))
+    essais.append(interne)
+
     for chemin in essais:
         try:
             os.makedirs(chemin, exist_ok=True)
-            temoin = os.path.join(chemin, ".ecriture")
-            with open(temoin, "w") as f:
-                f.write("x")
+            temoin = os.path.join(chemin, "_test_ecriture.wav")
+            with open(temoin, "wb") as f:
+                f.write(b"RIFF\x00\x00\x00\x00WAVE")
             os.remove(temoin)
             return chemin
         except Exception:  # noqa: BLE001
             continue
-    return essais[-1]
+    return interne
 
 
 def demander_acces_total():
@@ -1115,9 +1123,7 @@ class EcranTraitement(BoxLayout):
 
             dst = dossier_sortie(self.src)
             self.journal("--- TRAITEMENT (%s) ---" % self.spin.text)
-            if not dst.startswith(self.src):
-                self.journal("Ecriture interdite a cote des sources.")
-                self.journal("Sortie deviee vers : %s" % dst)
+            self.journal("Sortie : %s" % dst)
 
             def prog(i, n, rap):
                 self._pb(i, n)
