@@ -2751,6 +2751,16 @@ class EcranMorceau(BoxLayout):
         r2.add_widget(b_ex)
         corps.add_widget(r2)
 
+        r_env = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        b_plan = Bouton(text="Voir le plan", font_size=dp(12))
+        b_plan.bind(on_release=lambda *_: self.voir_plan())
+        r_env.add_widget(b_plan)
+        self.b_env = Bouton(text="PREPARER LA MACHINE", couleur=ORANGE,
+                            font_size=dp(12))
+        self.b_env.bind(on_release=lambda *_: self.preparer())
+        r_env.add_widget(self.b_env)
+        corps.add_widget(r_env)
+
         r3 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         b_s = Bouton(text="Sauver", font_size=dp(12))
         b_s.bind(on_release=lambda *_: NomPopup(
@@ -2948,6 +2958,82 @@ class EcranMorceau(BoxLayout):
             self.journal("Export impossible : %s" % e)
         finally:
             self.busy = False
+
+    # ------------------------------------------------------------ envoi
+    def _plan(self):
+        return morceau.plan_envoi(self.morceau, self.get_slots().projet)
+
+    def voir_plan(self):
+        if not self.morceau.sections:
+            self.journal("Morceau vide.")
+            return
+        self.journal("--- PLAN D'ENVOI ---")
+        for ligne in morceau.resume_plan(self._plan()).splitlines():
+            self.journal(ligne)
+
+    def preparer(self):
+        """Envoie patterns et sons du morceau en un seul transfert."""
+        if self.busy:
+            return
+        if not self.morceau.sections:
+            self.journal("Morceau vide.")
+            return
+        if not syro.disponible():
+            self.journal("Envoi direct indisponible.")
+            return
+        self.busy = True
+        self.b_env.disabled = True
+        threading.Thread(target=self._worker_preparer, daemon=True).start()
+
+    def _worker_preparer(self):
+        try:
+            plan = self._plan()
+            self.journal("--- PREPARATION DE LA MACHINE ---")
+            for a in plan["avertissements"]:
+                self.journal("  ! " + a)
+            if not plan["patterns"] and not plan["samples"]:
+                self.journal("Rien a envoyer.")
+                return
+
+            elements = []
+            projet = self.get_slots().projet
+            for slot, chemin, nom in plan["samples"]:
+                s = audio.read_wav(chemin)
+                cible = projet.slots[slot]
+                s, _ = audio.process(s, cible.preset, cible.gain_db)
+                if cible.taux:
+                    audio.changer_taux(s, cible.taux)
+                elements.append({"type": "sample", "slot": slot,
+                                 "sample": s, "nom": nom})
+                self.journal("  son  %3d  %s" % (slot, nom[:20]))
+
+            for emplacement, motif_, nom in plan["patterns"]:
+                elements.append({"type": "pattern", "slot": emplacement,
+                                 "donnees": motif_.to_bytes(), "nom": nom})
+                self.journal("  patt %3d  %s" % (emplacement, nom[:20]))
+
+            cible = os.path.join(dossier_travail(), "morceau_transfert.wav")
+            res = syro.flux_mixte(elements, cible)
+            self.journal("Flux pret : %.1f s pour %d element(s)"
+                         % (res["duree_s"], len(elements)))
+            self.journal("ATTENTION : les patterns 0 a %d et ces slots "
+                         "seront ECRASES." % max(
+                             (p[0] for p in plan["patterns"]), default=0))
+            self.journal("Casque vers SYNC IN, volume a fond.")
+            syro.jouer(res["chemin"])
+            suite = " ".join(str(n) for n in plan["ordre"])
+            self.journal("Ordre de jeu sur la machine : %s" % suite)
+        except syro.SyroIndisponible as e:
+            self.journal("Envoi indisponible : %s" % e)
+        except Exception as e:  # noqa: BLE001
+            self.journal("ERREUR : %s" % e)
+        finally:
+            self._fin_envoi()
+
+    @mainthread
+    def _fin_envoi(self):
+        self.busy = False
+        self.b_env.disabled = not syro.disponible()
 
     # ------------------------------------------------------------ fichier
     def sauver(self, nom):

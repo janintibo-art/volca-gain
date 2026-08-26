@@ -150,3 +150,68 @@ class TestFichier(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPlanEnvoi(unittest.TestCase):
+    def setUp(self):
+        from volca import project
+        self.tmp = tempfile.mkdtemp()
+        self.w = os.path.join(self.tmp, "s.wav")
+        audio.write_wav(self.w, son(220, 0.2))
+        self.p = project.Projet("k", "sample2")
+        self.p.assigner(3, self.w)
+        self.p.renommer(3, "Kick")
+        self.p.assigner(7, self.w)
+        self.p.renommer(7, "Snare")
+
+        self.m = morceau.Morceau("demo", 140)
+        self.a = motif("couplet", [(3, [1, 5, 9, 13])])
+        self.b = motif("break", [(7, [1, 3, 5, 7])])
+        self.m.ajouter(self.a, 4)
+        self.m.ajouter(self.b, 1)
+
+    def test_patterns_et_samples(self):
+        plan = morceau.plan_envoi(self.m, self.p)
+        self.assertEqual(len(plan["patterns"]), 2)
+        self.assertEqual([s[0] for s in plan["samples"]], [3, 7])
+        self.assertEqual(plan["avertissements"], [])
+
+    def test_patterns_identiques_dedupliques(self):
+        from volca import pattern as pat
+        self.m.ajouter(pat.Motif.from_bytes(self.a.to_bytes()), 2)
+        plan = morceau.plan_envoi(self.m, self.p)
+        self.assertEqual(len(plan["patterns"]), 2)
+        self.assertEqual(plan["ordre"], [0, 0, 0, 0, 1, 0, 0])
+
+    def test_ordre_suit_les_repetitions(self):
+        plan = morceau.plan_envoi(self.m, self.p)
+        self.assertEqual(plan["ordre"], [0, 0, 0, 0, 1])
+
+    def test_slot_vide_signale(self):
+        self.p.vider(7)
+        plan = morceau.plan_envoi(self.m, self.p)
+        self.assertEqual(len(plan["samples"]), 1)
+        self.assertTrue(any("7" in a for a in plan["avertissements"]))
+
+    def test_limite_dix_patterns(self):
+        m = morceau.Morceau("gros")
+        for i in range(14):
+            m.ajouter(motif("p%d" % i, [(3, [1 + (i % 15)])]), 1)
+        plan = morceau.plan_envoi(m, self.p)
+        self.assertEqual(len(plan["patterns"]), 10)
+        self.assertTrue(plan["avertissements"])
+
+    def test_sans_samples(self):
+        plan = morceau.plan_envoi(self.m, self.p, avec_samples=False)
+        self.assertEqual(plan["samples"], [])
+        self.assertEqual(len(plan["patterns"]), 2)
+
+    def test_sans_projet(self):
+        plan = morceau.plan_envoi(self.m, None)
+        self.assertEqual(plan["samples"], [])
+
+    def test_resume_lisible(self):
+        r = morceau.resume_plan(morceau.plan_envoi(self.m, self.p))
+        self.assertIn("pattern 0", r)
+        self.assertIn("Kick", r)
+        self.assertIn("Ordre de jeu", r)

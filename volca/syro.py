@@ -308,6 +308,83 @@ def erase_stream(indices, out_path):
     return _rendre(lib, items, len(indices), out_path, detail)
 
 
+def flux_mixte(elements, out_path, compress=True, quality=16):
+    """Un seul flux pour tout envoyer : samples ET patterns.
+
+    elements : liste de dictionnaires
+        {"type": "sample",  "slot": 0-199, "sample": audio.Sample}
+        {"type": "pattern", "slot": 0-9,   "donnees": 2624 octets}
+        {"type": "effacer", "slot": 0-199}
+
+    Le SDK Korg accepte plusieurs elements par flux : tout part en une
+    seule lecture, au lieu d'un transfert par element.
+    """
+    lib = _charger()
+    if lib is None:
+        raise SyroIndisponible(raison_indisponible())
+    if not elements:
+        raise ValueError("rien a envoyer")
+
+    items = (VGData * len(elements))()
+    buffers = []
+    detail = []
+
+    for i, e in enumerate(elements):
+        genre = e.get("type", "sample")
+        num = int(e.get("slot", 0))
+
+        if genre == "pattern":
+            donnees = e["donnees"]
+            if not 0 <= num <= PATTERN_MAX:
+                raise ValueError("pattern hors limites : %d" % num)
+            if len(donnees) != PATTERN_TAILLE:
+                raise ValueError("pattern %d : %d octets au lieu de %d"
+                                 % (num, len(donnees), PATTERN_TAILLE))
+            buf = (ctypes.c_uint8 * len(donnees)).from_buffer_copy(donnees)
+            buffers.append(buf)
+            items[i].type = TYPE_PATTERN
+            items[i].number = num
+            items[i].quality = 16
+            items[i].compress = 0
+            items[i].fs = STREAM_RATE
+            items[i].size = len(donnees)
+            items[i].data = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint8))
+            detail.append({"slot": num, "nom": e.get("nom", "pattern %d" % num),
+                           "genre": "pattern"})
+
+        elif genre == "effacer":
+            if not 0 <= num <= SLOT_MAX:
+                raise ValueError("slot hors limites : %d" % num)
+            items[i].type = TYPE_ERASE
+            items[i].number = num
+            items[i].quality = 16
+            items[i].compress = 0
+            items[i].fs = STREAM_RATE
+            items[i].size = 0
+            items[i].data = None
+            detail.append({"slot": num, "nom": "<efface>", "genre": "effacer"})
+
+        else:
+            if not 0 <= num <= SLOT_MAX:
+                raise ValueError("slot hors limites : %d" % num)
+            son = e["sample"]
+            pcm = _pcm16(son)
+            buf = (ctypes.c_uint8 * len(pcm)).from_buffer_copy(pcm)
+            buffers.append(buf)
+            items[i].type = TYPE_SAMPLE
+            items[i].number = num
+            items[i].quality = max(8, min(16, int(quality)))
+            items[i].compress = 1 if compress else 0
+            items[i].fs = son.rate
+            items[i].size = len(pcm)
+            items[i].data = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint8))
+            detail.append({"slot": num, "nom": e.get("nom", son.name),
+                           "genre": "sample",
+                           "duree_ms": round(son.duration_ms, 1)})
+
+    return _rendre(lib, items, len(elements), out_path, detail)
+
+
 def _rendre(lib, items, count, out_path, detail):
     ptr = ctypes.POINTER(ctypes.c_int16)()
     frames = ctypes.c_uint32(0)

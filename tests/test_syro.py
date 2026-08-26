@@ -161,3 +161,48 @@ class TestSyroPattern(TestSyro):
     def test_liste_vide(self):
         with self.assertRaises(ValueError):
             self.syro.pattern_stream([], os.path.join(self.tmp, "p.wav"))
+
+
+@unittest.skipIf(compilateur() is None, "aucun compilateur C")
+class TestFluxMixte(TestSyro):
+    """Samples et patterns dans un seul flux."""
+
+    def test_melange(self):
+        from volca import pattern
+        src = os.path.join(self.tmp, "m.wav")
+        make_wav(src, secs=0.1, amp=0.3)
+        from volca import audio
+        son = audio.read_wav(src)
+        m = pattern.vierge()
+        m.partie(1).depuis_liste([1, 5])
+        elements = [
+            {"type": "sample", "slot": 3, "sample": son, "nom": "Kick"},
+            {"type": "pattern", "slot": 0, "donnees": m.to_bytes()},
+            {"type": "effacer", "slot": 9},
+        ]
+        out = os.path.join(self.tmp, "mixte.wav")
+        res = self.syro.flux_mixte(elements, out)
+        self.assertTrue(os.path.isfile(out))
+        self.assertEqual(len(res["slots"]), 3)
+        genres = [d["genre"] for d in res["slots"]]
+        self.assertEqual(genres, ["sample", "pattern", "effacer"])
+
+    def test_liste_vide(self):
+        with self.assertRaises(ValueError):
+            self.syro.flux_mixte([], os.path.join(self.tmp, "x.wav"))
+
+    def test_pattern_hors_limites(self):
+        from volca import pattern
+        with self.assertRaises(ValueError):
+            self.syro.flux_mixte(
+                [{"type": "pattern", "slot": 12,
+                  "donnees": pattern.vierge().to_bytes()}],
+                os.path.join(self.tmp, "x.wav"))
+
+    def test_slot_sample_hors_limites(self):
+        from volca import audio
+        with self.assertRaises(ValueError):
+            self.syro.flux_mixte(
+                [{"type": "sample", "slot": 500,
+                  "sample": audio.Sample([0.1] * 100, 44100)}],
+                os.path.join(self.tmp, "x.wav"))

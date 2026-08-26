@@ -178,6 +178,66 @@ class Morceau:
         return m
 
 
+def plan_envoi(morceau, projet=None, avec_samples=True, max_patterns=10):
+    """Prepare tout ce qu'il faut envoyer pour jouer ce morceau.
+
+    Les patterns identiques ne sont envoyes qu'une fois : deux sections
+    qui reprennent le meme motif partagent le meme emplacement machine.
+
+    Renvoie un dictionnaire :
+        patterns      [(emplacement, Motif, nom)]
+        samples       [(slot, chemin, nom)]
+        ordre         la suite des emplacements a jouer, dans l'ordre
+        avertissements
+    """
+    vus = {}
+    patterns = []
+    ordre = []
+    avertissements = []
+
+    for sec in morceau.sections:
+        cle = sec.motif.to_bytes()
+        if cle not in vus:
+            if len(patterns) >= max_patterns:
+                avertissements.append(
+                    "Plus de %d patterns differents : '%s' et la suite "
+                    "ne seront pas envoyes." % (max_patterns, sec.nom))
+                break
+            vus[cle] = len(patterns)
+            patterns.append((len(patterns), sec.motif, sec.nom))
+        ordre.extend([vus[cle]] * sec.repetitions)
+
+    samples = []
+    if avec_samples and projet is not None:
+        for num in morceau.samples_utilises():
+            slot = projet.slots[num] if num < projet.nb_slots else None
+            if slot is None or slot.vide:
+                avertissements.append("Slot %d vide : le son manquera." % num)
+                continue
+            samples.append((num, slot.chemin, slot.nom))
+
+    return {"patterns": patterns, "samples": samples, "ordre": ordre,
+            "avertissements": avertissements}
+
+
+def resume_plan(plan):
+    lignes = ["%d pattern(s), %d son(s)" % (len(plan["patterns"]),
+                                            len(plan["samples"]))]
+    for emplacement, _m, nom in plan["patterns"]:
+        lignes.append("  pattern %d  <-  %s" % (emplacement, nom[:24]))
+    for slot, _c, nom in plan["samples"]:
+        lignes.append("  slot %3d   <-  %s" % (slot, nom[:24]))
+    if plan["ordre"]:
+        suite = " ".join(str(n) for n in plan["ordre"][:24])
+        if len(plan["ordre"]) > 24:
+            suite += " ..."
+        lignes.append("")
+        lignes.append("Ordre de jeu : %s" % suite)
+    for a in plan["avertissements"]:
+        lignes.append("  ! " + a)
+    return "\n".join(lignes)
+
+
 def infos(chemin):
     m = Morceau.charger(chemin)
     return {"nom": m.nom, "bpm": m.bpm, "swing": m.swing,
