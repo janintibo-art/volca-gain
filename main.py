@@ -186,6 +186,30 @@ RACCOURCIS_ANDROID = [
 ]
 
 
+def dossier_sortie(source):
+    """Ou ecrire les fichiers traites.
+
+    Android interdit souvent de CREER un dossier dans un espace partage,
+    meme quand la lecture y est autorisee. On essaie a cote des sources,
+    puis on se rabat sur le dossier de l'application, ou l'ecriture est
+    toujours permise.
+    """
+    base = os.path.basename(source.rstrip("/\\")) or "sortie"
+    essais = [os.path.join(source, "volca_out"),
+              os.path.join(dossier_travail(), "volca_out", base)]
+    for chemin in essais:
+        try:
+            os.makedirs(chemin, exist_ok=True)
+            temoin = os.path.join(chemin, ".ecriture")
+            with open(temoin, "w") as f:
+                f.write("x")
+            os.remove(temoin)
+            return chemin
+        except Exception:  # noqa: BLE001
+            continue
+    return essais[-1]
+
+
 def demander_acces_total():
     """Ouvre l'ecran systeme "Acces a tous les fichiers".
 
@@ -1089,8 +1113,11 @@ class EcranTraitement(BoxLayout):
                     self._pb(i + 1, len(fichiers))
                 return
 
-            dst = os.path.join(self.src, "volca_out")
+            dst = dossier_sortie(self.src)
             self.journal("--- TRAITEMENT (%s) ---" % self.spin.text)
+            if not dst.startswith(self.src):
+                self.journal("Ecriture interdite a cote des sources.")
+                self.journal("Sortie deviee vers : %s" % dst)
 
             def prog(i, n, rap):
                 self._pb(i, n)
@@ -1102,7 +1129,8 @@ class EcranTraitement(BoxLayout):
             raps = batch.process_folder(self.src, dst, self.spin.text,
                                         self.sl.value, prog)
             ok = sum(1 for r in raps if r.get("ok"))
-            self.journal("%d fichier(s) ecrit(s) dans %s" % (ok, dst))
+            self.journal("%d fichier(s) ecrit(s) dans :" % ok)
+            self.journal(dst)
         except Exception as e:  # noqa: BLE001
             self.journal("ERREUR : %s" % e)
         finally:
