@@ -330,3 +330,99 @@ class TestRenommer(unittest.TestCase):
         f = self.p.sauver(os.path.join(self.tmp, "k.volca.json"))
         q = project.Projet.charger(f)
         self.assertEqual(q.slots[3].nom, "Snare vintage")
+
+
+class TestAppariement(unittest.TestCase):
+    """Associer des fichiers aux bons numeros de slot."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = project.Projet("k", "sample2")
+
+    def _w(self, nom):
+        chemin = os.path.join(self.tmp, nom)
+        make_wav(chemin, secs=0.1, amp=0.3)
+        return chemin
+
+    def test_numero_en_tete(self):
+        f = [self._w("003_kick.wav"), self._w("012_snare.wav")]
+        assoc, restants = project.apparier([3, 12], f, self.p)
+        self.assertTrue(assoc[3].endswith("003_kick.wav"))
+        self.assertTrue(assoc[12].endswith("012_snare.wav"))
+        self.assertEqual(restants, [])
+
+    def test_ressemblance_de_nom(self):
+        self.p.slots[7].nom = "Snare Vintage"
+        f = [self._w("snare vintage.wav"), self._w("autre.wav")]
+        assoc, _ = project.apparier([7, 20], f, self.p)
+        self.assertTrue(assoc[7].endswith("snare vintage.wav"))
+
+    def test_ordre_alphabetique_par_defaut(self):
+        f = [self._w("zzz.wav"), self._w("aaa.wav")]
+        assoc, _ = project.apparier([5, 9], f, self.p)
+        self.assertTrue(assoc[5].endswith("aaa.wav"))
+        self.assertTrue(assoc[9].endswith("zzz.wav"))
+
+    def test_priorite_au_numero(self):
+        """Le numero doit l'emporter sur l'alphabet."""
+        f = [self._w("aaa.wav"), self._w("009_precis.wav")]
+        assoc, _ = project.apparier([9, 20], f, self.p)
+        self.assertTrue(assoc[9].endswith("009_precis.wav"))
+
+    def test_plus_de_slots_que_de_fichiers(self):
+        f = [self._w("un.wav")]
+        assoc, restants = project.apparier([1, 2, 3], f, self.p)
+        self.assertEqual(len(assoc), 1)
+        self.assertEqual(restants, [])
+
+    def test_plus_de_fichiers_que_de_slots(self):
+        f = [self._w("a.wav"), self._w("b.wav"), self._w("c.wav")]
+        assoc, restants = project.apparier([1], f, self.p)
+        self.assertEqual(len(assoc), 1)
+        self.assertEqual(len(restants), 2)
+
+    def test_aucun_fichier(self):
+        assoc, restants = project.apparier([1, 2], [], self.p)
+        self.assertEqual(assoc, {})
+        self.assertEqual(restants, [])
+
+    def test_sans_projet(self):
+        f = [self._w("005_x.wav")]
+        assoc, _ = project.apparier([5], f, None)
+        self.assertTrue(assoc[5].endswith("005_x.wav"))
+
+
+class TestRemplirSlots(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.p = project.Projet("k", "sample2")
+        self.f = {}
+        for nom in ("a.wav", "b.wav"):
+            chemin = os.path.join(self.tmp, nom)
+            make_wav(chemin, secs=0.2, amp=0.3)
+            self.f[nom] = chemin
+
+    def test_remplissage(self):
+        r = self.p.remplir_slots({3: self.f["a.wav"], 7: self.f["b.wav"]})
+        self.assertEqual(len(r), 2)
+        self.assertFalse(self.p.slots[3].vide)
+        self.assertFalse(self.p.slots[7].vide)
+        self.assertAlmostEqual(r[0]["duree_ms"], 200, delta=20)
+
+    def test_fichier_illisible_signale(self):
+        faux = os.path.join(self.tmp, "faux.wav")
+        open(faux, "w").write("pas un wav")
+        r = self.p.remplir_slots({3: faux})
+        self.assertIn("erreur", r[0])
+        self.assertTrue(self.p.slots[3].vide)
+
+    def test_preset_applique(self):
+        self.p.remplir_slots({3: self.f["a.wav"]}, preset="max", gain_db=-2.0)
+        self.assertEqual(self.p.slots[3].preset, "max")
+        self.assertEqual(self.p.slots[3].gain_db, -2.0)
+
+    def test_progression(self):
+        vus = []
+        self.p.remplir_slots({3: self.f["a.wav"], 7: self.f["b.wav"]},
+                             progression=lambda n, t, i: vus.append(n))
+        self.assertEqual(vus, [1, 2])

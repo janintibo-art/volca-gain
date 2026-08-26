@@ -215,3 +215,30 @@ class TestPlanEnvoi(unittest.TestCase):
         self.assertIn("pattern 0", r)
         self.assertIn("Kick", r)
         self.assertIn("Ordre de jeu", r)
+
+
+class TestSlotsManquants(unittest.TestCase):
+    def setUp(self):
+        from volca import project
+        self.tmp = tempfile.mkdtemp()
+        self.w = os.path.join(self.tmp, "s.wav")
+        audio.write_wav(self.w, son(220, 0.2))
+        self.p = project.Projet("k", "sample2")
+        self.m = morceau.Morceau("demo")
+        self.m.ajouter(motif("a", [(3, [1]), (7, [5])]), 1)
+
+    def test_tous_manquants(self):
+        self.assertEqual(morceau.slots_manquants(self.m, self.p), [3, 7])
+
+    def test_partiellement_remplis(self):
+        self.p.assigner(3, self.w)
+        self.assertEqual(morceau.slots_manquants(self.m, self.p), [7])
+
+    def test_aucun_manquant(self):
+        self.p.assigner(3, self.w)
+        self.p.assigner(7, self.w)
+        self.assertEqual(morceau.slots_manquants(self.m, self.p), [])
+
+    def test_partie_muette_non_comptee(self):
+        self.m.sections[0].motif.partie(2).mettre("mute")
+        self.assertEqual(morceau.slots_manquants(self.m, self.p), [3])

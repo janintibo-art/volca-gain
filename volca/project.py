@@ -74,6 +74,65 @@ class Slot:
                     d.get("duree_ms", 0.0), d.get("taux"))
 
 
+def _normaliser(txt):
+    """Reduit un nom a l'essentiel pour pouvoir le comparer."""
+    return "".join(c for c in txt.lower() if c.isalnum())
+
+
+def apparier(indices, fichiers, projet=None):
+    """Associe des fichiers WAV a des numeros de slot.
+
+    Trois strategies, de la plus sure a la plus approximative :
+
+    1. le nom du fichier commence par le numero du slot  (003_kick.wav)
+    2. le nom du fichier ressemble au nom deja donne au slot
+    3. a defaut, ordre alphabetique sur les slots restants
+
+    Renvoie (associations, restants) ou associations est un
+    dictionnaire {numero_de_slot: chemin}.
+    """
+    indices = sorted(set(indices))
+    libres = list(fichiers)
+    assoc = {}
+
+    # 1. numero en tete du nom de fichier
+    for num in list(indices):
+        for f in list(libres):
+            base = os.path.basename(f)
+            tete = ""
+            for c in base:
+                if c.isdigit():
+                    tete += c
+                else:
+                    break
+            if tete and int(tete) == num:
+                assoc[num] = f
+                libres.remove(f)
+                indices.remove(num)
+                break
+
+    # 2. ressemblance avec le nom du slot
+    if projet is not None:
+        for num in list(indices):
+            slot = projet.slots[num] if num < projet.nb_slots else None
+            cible = _normaliser(slot.nom) if slot and slot.nom else ""
+            if not cible:
+                continue
+            for f in list(libres):
+                nom = _normaliser(os.path.splitext(os.path.basename(f))[0])
+                if nom and (nom == cible or cible in nom or nom in cible):
+                    assoc[num] = f
+                    libres.remove(f)
+                    indices.remove(num)
+                    break
+
+    # 3. ordre alphabetique pour le reste
+    for num, f in zip(indices, sorted(libres)):
+        assoc[num] = f
+    restants = [f for f in libres if f not in assoc.values()]
+    return assoc, restants
+
+
 class Projet:
     def __init__(self, nom="projet", modele="sample"):
         self.nom = nom
@@ -124,6 +183,28 @@ class Projet:
         s.analyser()
         self.slots[index] = s
         return s
+
+    def remplir_slots(self, associations, preset="punch", gain_db=0.0,
+                      progression=None):
+        """Place des fichiers dans des slots precis.
+
+        associations : {numero_de_slot: chemin}
+        Renvoie la liste des rapports, un par slot traite.
+        """
+        rapport = []
+        items = sorted(associations.items())
+        for n, (index, chemin) in enumerate(items, 1):
+            try:
+                s = self.assigner(index, chemin, preset, gain_db)
+                rapport.append({"slot": index, "nom": s.nom,
+                                "duree_ms": round(s.duree_ms, 1)})
+            except Exception as e:  # noqa: BLE001
+                rapport.append({"slot": index,
+                                "nom": os.path.basename(chemin),
+                                "erreur": str(e)})
+            if progression:
+                progression(n, len(items), index)
+        return rapport
 
     def renommer(self, index, nom):
         """Change le nom affiche d'un slot.

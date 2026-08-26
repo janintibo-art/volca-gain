@@ -220,6 +220,16 @@ def plan_envoi(morceau, projet=None, avec_samples=True, max_patterns=10):
             "avertissements": avertissements}
 
 
+def slots_manquants(morceau, projet):
+    """Numeros de sample utilises par le morceau mais dont le slot est vide."""
+    out = []
+    for num in morceau.samples_utilises():
+        slot = projet.slots[num] if num < projet.nb_slots else None
+        if slot is None or slot.vide:
+            out.append(num)
+    return out
+
+
 def resume_plan(plan):
     lignes = ["%d pattern(s), %d son(s)" % (len(plan["patterns"]),
                                             len(plan["samples"]))]

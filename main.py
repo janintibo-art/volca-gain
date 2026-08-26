@@ -2727,6 +2727,17 @@ class EcranMorceau(BoxLayout):
         cadre.add_widget(sv)
         corps.add_widget(cadre)
 
+        r_slots = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        b_manq = Bouton(text="Slots manquants", font_size=dp(12))
+        b_manq.bind(on_release=lambda *_: self.voir_manquants())
+        r_slots.add_widget(b_manq)
+        b_rempl = Bouton(text="Remplir depuis un dossier", couleur=CYAN,
+                         font_size=dp(12))
+        b_rempl.bind(on_release=lambda *_: Chooser(
+            self.remplir_slots, dossiers=True).open())
+        r_slots.add_widget(b_rempl)
+        corps.add_widget(r_slots)
+
         r1 = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         b_a = Bouton(text="+ Pattern courant", couleur=ORANGE,
                      font_size=dp(12))
@@ -2958,6 +2969,77 @@ class EcranMorceau(BoxLayout):
             self.journal("Export impossible : %s" % e)
         finally:
             self.busy = False
+
+    # ------------------------------------------------------------ slots
+    def voir_manquants(self):
+        if not self.morceau.sections:
+            self.journal("Morceau vide.")
+            return
+        projet = self.get_slots().projet
+        utilises = self.morceau.samples_utilises()
+        manquants = morceau.slots_manquants(self.morceau, projet)
+        self.journal("--- SLOTS DU MORCEAU ---")
+        self.journal("Utilises : %s"
+                     % ", ".join(str(n) for n in utilises) or "aucun")
+        if manquants:
+            self.journal("MANQUANTS : %s"
+                         % ", ".join(str(n) for n in manquants))
+            self.journal("Remplis-les depuis un dossier de WAV.")
+        else:
+            self.journal("Tous les slots necessaires sont remplis.")
+
+    def remplir_slots(self, dossier):
+        if self.busy:
+            return
+        if not self.morceau.sections:
+            self.journal("Morceau vide.")
+            return
+        self.busy = True
+        threading.Thread(target=self._worker_remplir, args=(dossier,),
+                         daemon=True).start()
+
+    def _worker_remplir(self, dossier):
+        """Place les WAV du dossier dans les slots que le morceau attend."""
+        try:
+            projet = self.get_slots().projet
+            manquants = morceau.slots_manquants(self.morceau, projet)
+            if not manquants:
+                self.journal("Aucun slot a remplir.")
+                return
+            fichiers = batch.list_wavs(dossier)
+            if not fichiers:
+                self.journal("Aucun WAV dans ce dossier.")
+                return
+
+            assoc, restants = project.apparier(manquants, fichiers, projet)
+            self.journal("--- REMPLISSAGE ---")
+            rapport = projet.remplir_slots(assoc)
+            for r in rapport:
+                if "erreur" in r:
+                    self.journal("  %3d  ECHEC %s" % (r["slot"], r["erreur"]))
+                else:
+                    self.journal("  %3d  <- %-18s %5.0f ms" % (
+                        r["slot"], r["nom"][:18], r["duree_ms"]))
+
+            encore = morceau.slots_manquants(self.morceau, projet)
+            if encore:
+                self.journal("Toujours vides : %s"
+                             % ", ".join(str(n) for n in encore))
+                self.journal("Il manque %d fichier(s) dans le dossier."
+                             % len(encore))
+            else:
+                self.journal("Tous les slots du morceau sont remplis.")
+            if restants:
+                self.journal("%d fichier(s) non utilises." % len(restants))
+            self._rafraichir_slots()
+        except Exception as e:  # noqa: BLE001
+            self.journal("Remplissage impossible : %s" % e)
+        finally:
+            self.busy = False
+
+    @mainthread
+    def _rafraichir_slots(self):
+        self.get_slots().rafraichir()
 
     # ------------------------------------------------------------ envoi
     def _plan(self):
