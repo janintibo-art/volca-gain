@@ -173,12 +173,47 @@ def chemin_asset(nom):
     return None
 
 
-def default_dir():
+RACCOURCIS_ANDROID = [
+    ("Telechargements", "/storage/emulated/0/Download"),
+    ("Telechargements", "/sdcard/Download"),
+    ("Musique", "/storage/emulated/0/Music"),
+    ("Musique", "/sdcard/Music"),
+    ("Documents", "/storage/emulated/0/Documents"),
+    ("Enregistrements", "/storage/emulated/0/Recordings"),
+    ("Stockage interne", "/storage/emulated/0"),
+    ("Stockage interne", "/sdcard"),
+    ("Carte SD", "/storage/sdcard1"),
+]
+
+
+def raccourcis():
+    """Dossiers utiles qui existent vraiment sur cet appareil."""
+    out, vus = [], set()
     if IS_ANDROID:
-        for p in ("/storage/emulated/0/Download", "/sdcard/Download", "/sdcard"):
+        for nom, p in RACCOURCIS_ANDROID:
+            if nom not in vus and os.path.isdir(p):
+                out.append((nom, p))
+                vus.add(nom)
+        # cartes SD montees sous /storage/XXXX-XXXX
+        try:
+            for n in sorted(os.listdir("/storage")):
+                p = os.path.join("/storage", n)
+                if n not in ("emulated", "self") and os.path.isdir(p):
+                    if not any(c[1] == p for c in out):
+                        out.append(("Carte %s" % n, p))
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        for nom, p in (("Accueil", os.path.expanduser("~")),
+                       ("Courant", os.getcwd())):
             if os.path.isdir(p):
-                return p
-    return os.path.expanduser("~")
+                out.append((nom, p))
+    return out
+
+
+def default_dir():
+    r = raccourcis()
+    return r[0][1] if r else os.path.expanduser("~")
 
 
 def dossier_travail():
@@ -620,32 +655,94 @@ class KitPopup(Popup):
 
 
 class Chooser(Popup):
+    """Selecteur de fichier ou de dossier, avec raccourcis et saisie
+    directe du chemin. Sur telephone, naviguer depuis la racine est
+    penible et on se perd vite."""
+
     def __init__(self, callback, dossiers=False, filtres=None, start=None, **kw):
         super().__init__(
             title="Choisir un dossier" if dossiers else "Choisir un fichier",
-            size_hint=(0.95, 0.9), **kw)
+            size_hint=(0.96, 0.92), **kw)
         self.callback = callback
         self.dossiers = dossiers
+
         box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(6))
+
+        # raccourcis
+        courts = raccourcis()
+        if courts:
+            barre = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(4))
+            for nom, chemin in courts[:4]:
+                b = Bouton(text=nom, font_size=dp(10), couleur=GRIS_CHOIX)
+                b.bind(on_release=lambda w, c=chemin: self._aller(c))
+                barre.add_widget(b)
+            box.add_widget(barre)
+
         self.chooser = FileChooserListView(
             path=start or default_dir(), dirselect=dossiers,
             filters=filtres or ["*"])
+        self.chooser.bind(path=self._maj_chemin)
         box.add_widget(self.chooser)
+
+        # chemin saisissable : dernier recours quand rien n'est visible
+        self.champ = TextInput(text=self.chooser.path, multiline=False,
+                               size_hint_y=None, height=dp(40),
+                               font_size=dp(12))
+        self.champ.bind(on_text_validate=lambda *_: self._aller(
+            self.champ.text.strip()))
+        box.add_widget(self.champ)
+
+        self.lbl = Label(text="", size_hint_y=None, height=dp(22),
+                         font_size=dp(11), color=(0.95, 0.55, 0.35, 1))
+        box.add_widget(self.lbl)
+
         row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
         b_no = Bouton(text="Annuler")
         b_no.bind(on_release=lambda *_: self.dismiss())
+        row.add_widget(b_no)
         b_ok = Bouton(text="Choisir", couleur=ORANGE)
         b_ok.bind(on_release=self._ok)
-        row.add_widget(b_no)
         row.add_widget(b_ok)
         box.add_widget(row)
         self.add_widget(box)
 
+    def _maj_chemin(self, _w, chemin):
+        self.champ.text = chemin
+        self.lbl.text = ""
+
+    def _aller(self, chemin):
+        if not chemin:
+            return
+        if os.path.isdir(chemin):
+            try:
+                os.listdir(chemin)
+            except Exception as e:  # noqa: BLE001
+                self.lbl.text = "Dossier illisible : %s" % e
+                return
+            self.chooser.path = chemin
+        else:
+            self.lbl.text = "Ce dossier n'existe pas ou n'est pas lisible."
+
     def _ok(self, *_):
         sel = self.chooser.selection
-        chemin = sel[0] if sel else self.chooser.path
-        if self.dossiers and os.path.isfile(chemin):
-            chemin = os.path.dirname(chemin)
+
+        if self.dossiers:
+            chemin = sel[0] if sel else self.chooser.path
+            if os.path.isfile(chemin):
+                chemin = os.path.dirname(chemin)
+            self.dismiss()
+            self.callback(chemin)
+            return
+
+        # mode fichier : ne jamais renvoyer un dossier
+        if not sel:
+            self.lbl.text = "Appuie d'abord sur un FICHIER dans la liste."
+            return
+        chemin = sel[0]
+        if os.path.isdir(chemin):
+            self._aller(chemin)
+            self.lbl.text = "C'est un dossier : ouvre-le et choisis un fichier."
+            return
         self.dismiss()
         self.callback(chemin)
 
@@ -1645,6 +1742,9 @@ class EcranSlots(BoxLayout):
             self._poser_projet(p)
             self.journal("Sons bruts, non traites : passe par TRAIT. ou "
                          "EDIT. pour les retravailler.")
+        except IsADirectoryError:
+            self.journal("C'est un dossier : choisis le fichier .vlcspllib "
+                         "lui-meme.")
         except Exception as e:  # noqa: BLE001
             self.journal("Import impossible : %s" % e)
         finally:
@@ -2271,12 +2371,19 @@ class VolcaGainApp(App):
 
     @staticmethod
     def _permissions():
+        """Android 13 a remplace READ_EXTERNAL_STORAGE par des permissions
+        par type de media. On demande les deux : le systeme ignore celles
+        qu'il ne connait pas."""
         try:
             from android.permissions import Permission, request_permissions
-            request_permissions([
-                Permission.READ_EXTERNAL_STORAGE,
-                Permission.WRITE_EXTERNAL_STORAGE,
-            ])
+            voulues = []
+            for nom in ("READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE",
+                        "READ_MEDIA_AUDIO"):
+                p = getattr(Permission, nom, None)
+                if p:
+                    voulues.append(p)
+            if voulues:
+                request_permissions(voulues)
         except Exception:  # noqa: BLE001
             pass
 

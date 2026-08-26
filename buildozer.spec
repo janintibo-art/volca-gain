@@ -7,7 +7,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,txt,md
 source.include_patterns = volca/*.py,assets/*.png
 source.exclude_dirs = tests,packaging,.github,bin,.buildozer,native
-version = 1.3.1
+version = 1.3.2
 
 # Uniquement la stdlib + Kivy : pas de numpy, pas de recette a compiler.
 requirements = python3,kivy==2.3.0
@@ -15,7 +15,7 @@ requirements = python3,kivy==2.3.0
 orientation = portrait
 fullscreen = 0
 
-android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
+android.permissions = READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,READ_MEDIA_AUDIO
 android.api = 33
 android.ndk = 25b
 android.minapi = 24
