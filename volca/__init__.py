@@ -1,6 +1,6 @@
 """volca-gain : preparation et transfert de samples pour Korg volca sample."""
 
-__version__ = "1.3.2"
+__version__ = "1.3.3"
 APP_NAME = "MOC'TA BASS"
 
 from . import (audio, batch, etat, kit, librarian, pattern, project,
