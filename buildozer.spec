@@ -1,5 +1,5 @@
 [app]
-title = MOC'TA BASS
+title = MOC’TA BASS
 package.name = moctabass
 package.domain = org.moctek
 
