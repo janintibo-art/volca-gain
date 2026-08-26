@@ -7,7 +7,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,txt,md
 source.include_patterns = volca/*.py,assets/*.png
 source.exclude_dirs = tests,packaging,.github,bin,.buildozer,native
-version = 1.2.0
+version = 1.2.1
 
 # Uniquement la stdlib + Kivy : pas de numpy, pas de recette a compiler.
 requirements = python3,kivy==2.3.0

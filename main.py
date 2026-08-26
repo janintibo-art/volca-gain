@@ -64,6 +64,102 @@ IS_ANDROID = "ANDROID_ARGUMENT" in os.environ
 TMP = tempfile.mkdtemp(prefix="volcagain_ui_")
 
 
+VERT_CRASH = (0.45, 1.0, 0.45, 1)
+
+
+def _dossiers_journal():
+    d = ["/sdcard/Download", "/storage/emulated/0/Download"]
+    try:
+        d.append(dossier_travail())
+    except Exception:  # noqa: BLE001
+        pass
+    d += ["/sdcard", os.getcwd(), tempfile.gettempdir()]
+    return d
+
+
+def journal_crash(texte):
+    """Ecrit la trace sur le disque. Renvoie le chemin, ou None.
+
+    Volontairement blinde : si le mouchard plante a son tour, on n'a
+    plus rien du tout.
+    """
+    for dossier in _dossiers_journal():
+        try:
+            if not dossier or not os.path.isdir(dossier):
+                continue
+            chemin = os.path.join(dossier, "moctabass_crash.txt")
+            with open(chemin, "w", encoding="utf-8") as f:
+                f.write(texte)
+            return chemin
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def trace_complete(e=None):
+    import traceback as tb
+    import platform as pf
+    lignes = ["MOC'TA BASS v%s - trace de plantage" % __version__, ""]
+    try:
+        lignes += ["python  : %s" % sys.version.split()[0],
+                   "systeme : %s" % pf.platform(),
+                   "android : %s" % IS_ANDROID,
+                   "dossier : %s" % dossier_travail(), ""]
+    except Exception:  # noqa: BLE001
+        pass
+    lignes.append(tb.format_exc() if e is None else "".join(
+        tb.format_exception(type(e), e, e.__traceback__)))
+    return "\n".join(lignes)
+
+
+class EcranErreur(BoxLayout):
+    """Affiche la trace au lieu de disparaitre."""
+
+    def __init__(self, texte, titre="PLANTAGE", **kw):
+        super().__init__(orientation="vertical", spacing=dp(6),
+                         padding=dp(10), **kw)
+        self.texte = texte
+        self.chemin = journal_crash(texte)
+
+        self.add_widget(Label(
+            text="[b]%s[/b]" % titre, markup=True, size_hint_y=None,
+            height=dp(30), color=(1, 0.45, 0.3, 1)))
+        self.add_widget(Label(
+            text=("Trace enregistree :\n%s" % self.chemin) if self.chemin
+                 else "Trace non enregistrable, recopie l'ecran",
+            size_hint_y=None, height=dp(40), font_size=dp(10),
+            color=TEXTE_2, halign="center"))
+
+        sv = ScrollView()
+        lbl = Label(text=texte, size_hint_y=None, halign="left",
+                    valign="top", font_size=dp(10), color=VERT_CRASH)
+        try:
+            lbl.font_name = "RobotoMono-Regular"
+        except Exception:  # noqa: BLE001
+            pass
+        lbl.bind(texture_size=lambda i, v: setattr(i, "height", v[1]),
+                 width=lambda i, v: setattr(i, "text_size", (v, None)))
+        sv.add_widget(lbl)
+        self.add_widget(sv)
+
+        r = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        b_c = Bouton(text="Copier", couleur=CYAN)
+        b_c.bind(on_release=self._copier)
+        r.add_widget(b_c)
+        self.lbl_ok = Label(text="", size_hint_x=0.6, font_size=dp(11),
+                            color=TEXTE_2)
+        r.add_widget(self.lbl_ok)
+        self.add_widget(r)
+
+    def _copier(self, *_):
+        try:
+            from kivy.core.clipboard import Clipboard
+            Clipboard.copy(self.texte)
+            self.lbl_ok.text = "copie dans le presse-papier"
+        except Exception as e:  # noqa: BLE001
+            self.lbl_ok.text = "copie impossible : %s" % e
+
+
 def chemin_asset(nom):
     """Trouve une image, y compris dans un .exe PyInstaller."""
     bases = [os.path.dirname(os.path.abspath(__file__))]
@@ -1920,15 +2016,32 @@ class Root(BoxLayout):
         sv.add_widget(self.log)
         self.add_widget(sv)
 
-        self.ec_slots = EcranSlots(self.journal)
-        self.ecrans = [
-            EcranTraitement(self.journal),
-            self.ec_slots,
-            EcranEditeur(self.journal, lambda: self.ec_slots),
-            EcranPattern(self.journal, lambda: self.ec_slots),
-            EcranTuto(),
+        # Chaque ecran est construit isolement : si l'un echoue, il est
+        # remplace par sa trace au lieu d'emporter toute l'application.
+        self.ec_slots = self._fabriquer("SLOTS", EcranSlots, self.journal)
+
+        fabriques = [
+            ("TRAIT.", EcranTraitement, (self.journal,)),
+            (None, None, None),   # SLOTS, deja construit
+            ("EDIT.", EcranEditeur, (self.journal, lambda: self.ec_slots)),
+            ("PATT.", EcranPattern, (self.journal, lambda: self.ec_slots)),
+            ("TUTO", EcranTuto, ()),
         ]
+        self.ecrans = []
+        for nom, classe, args in fabriques:
+            if classe is None:
+                self.ecrans.append(self.ec_slots)
+            else:
+                self.ecrans.append(self._fabriquer(nom, classe, *args))
         self.afficher(0)
+
+    def _fabriquer(self, nom, classe, *args):
+        try:
+            return classe(*args)
+        except Exception as e:  # noqa: BLE001
+            texte = trace_complete(e)
+            self.journal("ECHEC de l'onglet %s : %s" % (nom, e))
+            return EcranErreur(texte, "ONGLET %s" % nom)
 
     @mainthread
     def journal(self, txt):
@@ -1953,6 +2066,19 @@ class VolcaGainApp(App):
 
     def build(self):
         Window.clearcolor = FOND
+
+        # Toute exception non rattrapee est ecrite sur le disque, meme si
+        # l'interface ne peut plus rien afficher.
+        def _hook(t, v, tr):
+            try:
+                import traceback as tb
+                journal_crash("MOC'TA BASS v%s\n\n%s" % (
+                    __version__, "".join(tb.format_exception(t, v, tr))))
+            except Exception:  # noqa: BLE001
+                pass
+            sys.__excepthook__(t, v, tr)
+
+        sys.excepthook = _hook
         try:
             perso = reglages.charger(reglages.chemin_defaut(dossier_travail()))
             if perso:
