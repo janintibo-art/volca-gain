@@ -1231,20 +1231,22 @@ class EcranSlots(BoxLayout):
         self.mode_selection = False
         self._compte = None
 
+        # Un seul conteneur defilant pour toute la page : la grille garde
+        # sa hauteur naturelle (10 rangees en sample, 20 en sample2) au
+        # lieu d'etre comprimee dans un defilement imbrique.
+        self.page = ScrollView(do_scroll_x=False)
+        self.contenu = BoxLayout(orientation="vertical", spacing=dp(6),
+                                 size_hint_y=None, padding=(0, 0, 0, dp(6)))
+        self.contenu.bind(minimum_height=self.contenu.setter("height"))
+        self.page.add_widget(self.contenu)
+        BoxLayout.add_widget(self, self.page)
+
         self.lbl_mem = Label(text="", size_hint_y=None, height=dp(24),
                              font_size=dp(12), color=TEXTE)
-        self.add_widget(self.lbl_mem)
+        self.contenu.add_widget(self.lbl_mem)
         self.bar = ProgressBar(max=100, value=0, size_hint_y=None,
                                height=dp(12))
-        self.add_widget(self.bar)
-
-        sv = ScrollView(size_hint_y=0.5)
-        self.grille = GridLayout(cols=10, spacing=dp(2), size_hint_y=None)
-        self.grille.bind(minimum_height=self.grille.setter("height"))
-        self.boutons = []
-        sv.add_widget(self.grille)
-        self.add_widget(sv)
-        self._construire_grille()
+        self.contenu.add_widget(self.bar)
 
         rm = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         rm.add_widget(Label(text="Machine", size_hint_x=0.32, color=TEXTE,
@@ -1254,7 +1256,13 @@ class EcranSlots(BoxLayout):
             values=[m["libelle"] for m in project.MODELES.values()])
         self.spin_modele.bind(text=self._changer_modele)
         rm.add_widget(self.spin_modele)
-        self.add_widget(rm)
+        self.contenu.add_widget(rm)
+
+        self.grille = GridLayout(cols=10, spacing=dp(2), size_hint_y=None)
+        self.grille.bind(minimum_height=self.grille.setter("height"))
+        self.boutons = []
+        self.contenu.add_widget(self.grille)
+        self._construire_grille()
 
         r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         self.b_sel = Bouton(text="Selection", size_hint_x=0.45)
@@ -1264,7 +1272,7 @@ class EcranSlots(BoxLayout):
         b_rem.bind(on_release=lambda *_: Chooser(
             self._remplir, dossiers=True).open())
         r0.add_widget(b_rem)
-        self.add_widget(r0)
+        self.contenu.add_widget(r0)
 
         r1 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         b_s = Bouton(text="Sauver projet")
@@ -1277,7 +1285,7 @@ class EcranSlots(BoxLayout):
         b_m = Bouton(text="Optimiser", couleur=CYAN)
         b_m.bind(on_release=lambda *_: self._memoire())
         r1.add_widget(b_m)
-        self.add_widget(r1)
+        self.contenu.add_widget(r1)
 
         r1b = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         b_eg = Bouton(text="Egaliser le kit", couleur=VERT)
@@ -1289,7 +1297,7 @@ class EcranSlots(BoxLayout):
         b_k = Bouton(text="Kit", size_hint_x=0.5)
         b_k.bind(on_release=lambda *_: KitPopup(self).open())
         r1b.add_widget(b_k)
-        self.add_widget(r1b)
+        self.contenu.add_widget(r1b)
 
         r2 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r2.add_widget(Label(text="Qualite", size_hint_x=0.35, font_size=dp(12),
@@ -1297,7 +1305,7 @@ class EcranSlots(BoxLayout):
         self.spin_q = Spinner(text="16",
                               values=[str(i) for i in range(16, 7, -1)])
         r2.add_widget(self.spin_q)
-        self.add_widget(r2)
+        self.contenu.add_widget(r2)
 
         r3 = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(6))
         self.b_env = Bouton(text="ENVOYER", couleur=ORANGE)
@@ -1306,11 +1314,11 @@ class EcranSlots(BoxLayout):
         self.b_play = Bouton(text="Rejouer le flux")
         self.b_play.bind(on_release=lambda *_: self.rejouer())
         r3.add_widget(self.b_play)
-        self.add_widget(r3)
+        self.contenu.add_widget(r3)
 
         self.lbl_syro = Label(text="", size_hint_y=None, height=dp(22),
                               font_size=dp(11), color=TEXTE_2)
-        self.add_widget(self.lbl_syro)
+        self.contenu.add_widget(self.lbl_syro)
 
         self.rafraichir()
         Clock.schedule_once(lambda *_: self.maj_syro(), 0.3)
@@ -1739,6 +1747,13 @@ class EcranPattern(BoxLayout):
         self.partie = 1
         self.busy = False
 
+        self.page = ScrollView(do_scroll_x=False)
+        self.contenu = BoxLayout(orientation="vertical", spacing=dp(6),
+                                 size_hint_y=None, padding=(0, 0, 0, dp(6)))
+        self.contenu.bind(minimum_height=self.contenu.setter("height"))
+        self.page.add_widget(self.contenu)
+        self.add_widget(self.page)
+
         r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         r0.add_widget(Label(text="Partie", size_hint_x=0.3, color=TEXTE,
                             font_size=dp(12)))
@@ -1746,7 +1761,7 @@ class EcranPattern(BoxLayout):
             text="1", values=[str(i) for i in range(1, 11)])
         self.spin_partie.bind(text=self._changer_partie)
         r0.add_widget(self.spin_partie)
-        self.add_widget(r0)
+        self.contenu.add_widget(r0)
 
         r1 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         self.lbl_sample = Label(text="Sample 0", size_hint_x=0.45,
@@ -1755,11 +1770,11 @@ class EcranPattern(BoxLayout):
         self.sl_sample = Slider(min=0, max=199, value=0, step=1)
         self.sl_sample.bind(value=self._changer_sample)
         r1.add_widget(self.sl_sample)
-        self.add_widget(r1)
+        self.contenu.add_widget(r1)
 
         # grille de pas : deux rangees de huit
-        cadre = Panneau(orientation="vertical", size_hint_y=1,
-                        padding=dp(6), spacing=dp(4))
+        cadre = Panneau(orientation="vertical", size_hint_y=None,
+                        height=dp(130), padding=dp(6), spacing=dp(4))
         self.pas = []
         for rangee in range(2):
             ligne = BoxLayout(spacing=dp(3))
@@ -1770,7 +1785,7 @@ class EcranPattern(BoxLayout):
                 self.pas.append(b)
                 ligne.add_widget(b)
             cadre.add_widget(ligne)
-        self.add_widget(cadre)
+        self.contenu.add_widget(cadre)
 
         r2 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(4))
         self.b_fonc = {}
@@ -1780,7 +1795,7 @@ class EcranPattern(BoxLayout):
             b.bind(on_release=lambda w, n=nom: self._basculer_fonction(n))
             self.b_fonc[nom] = b
             r2.add_widget(b)
-        self.add_widget(r2)
+        self.contenu.add_widget(r2)
 
         r3 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         self.lbl_niveau = Label(text="Niveau 127", size_hint_x=0.45,
@@ -1789,7 +1804,7 @@ class EcranPattern(BoxLayout):
         self.sl_niveau = Slider(min=0, max=127, value=127, step=1)
         self.sl_niveau.bind(value=self._changer_niveau)
         r3.add_widget(self.sl_niveau)
-        self.add_widget(r3)
+        self.contenu.add_widget(r3)
 
         r4 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         for txt, fn in (("Vider partie", self._vider_partie),
@@ -1797,7 +1812,7 @@ class EcranPattern(BoxLayout):
             b = Bouton(text=txt, font_size=dp(12))
             b.bind(on_release=lambda w, f=fn: f())
             r4.add_widget(b)
-        self.add_widget(r4)
+        self.contenu.add_widget(r4)
 
         r5 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         b_o = Bouton(text="Ouvrir .dat", couleur=CYAN)
@@ -1808,7 +1823,7 @@ class EcranPattern(BoxLayout):
         b_s.bind(on_release=lambda *_: NomPopup(
             "Nom du pattern", self.motif.nom, self._enregistrer).open())
         r5.add_widget(b_s)
-        self.add_widget(r5)
+        self.contenu.add_widget(r5)
 
         r6 = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(6))
         r6.add_widget(Label(text="Vers", size_hint_x=0.22, color=TEXTE,
@@ -1819,11 +1834,11 @@ class EcranPattern(BoxLayout):
         self.b_env = Bouton(text="ENVOYER", couleur=ORANGE)
         self.b_env.bind(on_release=lambda *_: self.envoyer())
         r6.add_widget(self.b_env)
-        self.add_widget(r6)
+        self.contenu.add_widget(r6)
 
         self.lbl_etat = Label(text="", size_hint_y=None, height=dp(22),
                               font_size=dp(11), color=TEXTE_2)
-        self.add_widget(self.lbl_etat)
+        self.contenu.add_widget(self.lbl_etat)
 
         self.rafraichir()
         Clock.schedule_once(lambda *_: self._maj_syro(), 0.4)
