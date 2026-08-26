@@ -45,8 +45,8 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
-from volca import (__version__, audio, batch, etat, kit, project,
-                   reglages, syro, tips)
+from volca import (__version__, audio, batch, etat, kit, pattern,
+                   project, reglages, syro, tips)
 
 # ---------------------------------------------------------------- palette
 FOND = (0.055, 0.055, 0.07, 1)
@@ -515,9 +515,10 @@ class ChoixSlot(Popup):
         g = GridLayout(cols=10, spacing=dp(2), size_hint_y=None,
                        padding=dp(6))
         g.bind(minimum_height=g.setter("height"))
-        for i in range(project.NB_SLOTS):
+        for i in range(projet.nb_slots):
             libre = projet.slots[i].vide
-            b = Bouton(text="%02d" % i, font_size=dp(11), size_hint_y=None,
+            fmt = "%03d" if projet.nb_slots > 100 else "%02d"
+            b = Bouton(text=fmt % i, font_size=dp(11), size_hint_y=None,
                        height=dp(38), couleur=GRIS if libre else ORANGE_S)
             b.bind(on_release=lambda w, idx=i: self._choisi(idx))
             g.add_widget(b)
@@ -534,8 +535,8 @@ class SlotPopup(Popup):
         self.ecran = ecran
         self.index = index
         slot = ecran.projet.slots[index]
-        super().__init__(title="Slot %02d" % index, size_hint=(0.9, None),
-                         height=dp(340), **kw)
+        super().__init__(title="Slot %d" % index, size_hint=(0.9, None),
+                         height=dp(392), **kw)
 
         box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
         self.lbl = Label(text=slot.nom or "(vide)", size_hint_y=None,
@@ -568,6 +569,12 @@ class SlotPopup(Popup):
         r2.add_widget(self.sl)
         box.add_widget(r2)
 
+        r_nom = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        b_ren = Bouton(text="Renommer", font_size=dp(12), couleur=CYAN)
+        b_ren.bind(on_release=lambda *_: self._renommer())
+        r_nom.add_widget(b_ren)
+        box.add_widget(r_nom)
+
         r_rang = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
         for txt, action in (("Deplacer", "deplacer"),
                             ("Echanger", "echanger"),
@@ -586,6 +593,23 @@ class SlotPopup(Popup):
         r3.add_widget(b_ok)
         box.add_widget(r3)
         self.add_widget(box)
+
+    def _renommer(self):
+        slot = self.ecran.projet.slots[self.index]
+        if slot.vide:
+            self.ecran.journal("Slot %d vide." % self.index)
+            return
+        NomPopup("Nom du slot %d" % self.index, slot.nom,
+                 self._faire_renommer).open()
+
+    def _faire_renommer(self, nom):
+        try:
+            s = self.ecran.projet.renommer(self.index, nom)
+            self.lbl.text = s.nom
+            self.ecran.rafraichir()
+            self.ecran.journal("Slot %d renomme : %s" % (self.index, s.nom))
+        except Exception as e:  # noqa: BLE001
+            self.ecran.journal("Renommage impossible : %s" % e)
 
     def _ranger(self, action):
         if self.ecran.projet.slots[self.index].vide:
@@ -1122,15 +1146,19 @@ class EcranSlots(BoxLayout):
         self.grille = GridLayout(cols=10, spacing=dp(2), size_hint_y=None)
         self.grille.bind(minimum_height=self.grille.setter("height"))
         self.boutons = []
-        for i in range(project.NB_SLOTS):
-            b = SlotBouton(text="%02d" % i, font_size=dp(10),
-                           size_hint_y=None, height=dp(42),
-                           couleur=GRIS, rayon=5)
-            b.bind(on_release=lambda w, idx=i: self._toucher(idx))
-            self.boutons.append(b)
-            self.grille.add_widget(b)
         sv.add_widget(self.grille)
         self.add_widget(sv)
+        self._construire_grille()
+
+        rm = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        rm.add_widget(Label(text="Machine", size_hint_x=0.32, color=TEXTE,
+                            font_size=dp(12)))
+        self.spin_modele = Spinner(
+            text=project.MODELES[self.projet.modele]["libelle"],
+            values=[m["libelle"] for m in project.MODELES.values()])
+        self.spin_modele.bind(text=self._changer_modele)
+        rm.add_widget(self.spin_modele)
+        self.add_widget(rm)
 
         r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         self.b_sel = Bouton(text="Selection", size_hint_x=0.45)
@@ -1203,15 +1231,18 @@ class EcranSlots(BoxLayout):
 
     def rafraichir(self):
         p = self.projet
+        if len(self.boutons) != p.nb_slots:
+            self._construire_grille()
         for i, b in enumerate(self.boutons):
             slot = p.slots[i]
             b.set_couleur(ORANGE_S if not slot.vide else GRIS)
+            num = "%03d" % i if p.nb_slots > 100 else "%02d" % i
             if slot.vide:
-                b.text = "%02d" % i
+                b.text = num
                 b.set_apercu(None)
             else:
                 marque = "*" if slot.taux else ""
-                b.text = "%02d%s\n%s" % (i, marque, slot.nom[:5])
+                b.text = "%s%s\n%s" % (num, marque, slot.nom[:5])
                 b.set_apercu(self._cache_apercu.get(slot.chemin))
                 if i in self.selection:
                     b.set_couleur(CYAN)
@@ -1223,7 +1254,7 @@ class EcranSlots(BoxLayout):
         pct = p.memoire_pct()
         self.bar.value = min(pct, 100)
         self.lbl_mem.text = "%d/%d slots - %.1f s / %.0f s (%.0f %%)%s" % (
-            len(p.occupes()), project.NB_SLOTS, p.memoire_utilisee_s(),
+            len(p.occupes()), p.nb_slots, p.memoire_utilisee_s(),
             p.memoire_totale_s(), pct,
             "  MEMOIRE DEPASSEE" if p.depassement() else "")
 
@@ -1248,6 +1279,38 @@ class EcranSlots(BoxLayout):
             slot = self.projet.slots[i]
             if not slot.vide:
                 b.set_apercu(self._cache_apercu.get(slot.chemin))
+
+    def _construire_grille(self):
+        """(Re)cree les boutons : 100 slots sur sample, 200 sur sample2."""
+        self.grille.clear_widgets()
+        self.boutons = []
+        for i in range(self.projet.nb_slots):
+            b = SlotBouton(text="%02d" % i, font_size=dp(10),
+                           size_hint_y=None, height=dp(42),
+                           couleur=GRIS, rayon=5)
+            b.bind(on_release=lambda w, idx=i: self._toucher(idx))
+            self.boutons.append(b)
+            self.grille.add_widget(b)
+
+    def _changer_modele(self, _sp, libelle):
+        cle = next((k for k, m in project.MODELES.items()
+                    if m["libelle"] == libelle), None)
+        if cle is None or cle == self.projet.modele:
+            return
+        perdus = self.projet.perdus_si(cle)
+        if perdus:
+            self.journal("ATTENTION : %d slot(s) au-dela de %d seront perdus."
+                         % (len(perdus), project.MODELES[cle]["slots"] - 1))
+            for s in perdus[:5]:
+                self.journal("  %03d %s" % (s.index, s.nom[:16]))
+        self.projet.changer_modele(cle)
+        self.selection = {i for i in self.selection
+                          if i < self.projet.nb_slots}
+        self._construire_grille()
+        self.rafraichir()
+        self.journal("Machine : %s (%d slots, %.0f s)"
+                     % (libelle, self.projet.nb_slots,
+                        self.projet.memoire_totale_s()))
 
     def _toucher(self, index):
         """Un appui : edite le slot, ou le (de)selectionne en mode selection."""
@@ -1379,6 +1442,9 @@ class EcranSlots(BoxLayout):
         self.projet = p
         self.selection.clear()
         self._cache_apercu.clear()
+        self._construire_grille()
+        if hasattr(self, "spin_modele"):
+            self.spin_modele.text = project.MODELES[p.modele]["libelle"]
         if p.chemin_fichier:
             self._memoriser(p.chemin_fichier)
         self.rafraichir()
@@ -1392,6 +1458,10 @@ class EcranSlots(BoxLayout):
             if not chemin:
                 return
             self.projet = project.Projet.charger(chemin)
+            self._construire_grille()
+            if hasattr(self, "spin_modele"):
+                self.spin_modele.text = \
+                    project.MODELES[self.projet.modele]["libelle"]
             self.rafraichir()
             self.journal("Projet repris : %s (%d slots)"
                          % (os.path.basename(chemin),
@@ -1420,6 +1490,10 @@ class EcranSlots(BoxLayout):
         try:
             self.projet = project.Projet.charger(chemin)
             self.selection.clear()
+            self._construire_grille()
+            if hasattr(self, "spin_modele"):
+                self.spin_modele.text = \
+                    project.MODELES[self.projet.modele]["libelle"]
             self._memoriser(chemin)
             self.journal("Projet charge : %s" % chemin)
             self.rafraichir()
@@ -1558,6 +1632,224 @@ class EcranSlots(BoxLayout):
 
 
 # --------------------------------------------------------------------------
+class EcranPattern(BoxLayout):
+    """Sequenceur : 10 parties x 16 pas, envoi vers un des 10 patterns."""
+
+    def __init__(self, journal, get_slots, **kw):
+        super().__init__(orientation="vertical", spacing=dp(6), **kw)
+        self.journal = journal
+        self.get_slots = get_slots
+        self.motif = pattern.vierge("nouveau")
+        self.partie = 1
+        self.busy = False
+
+        r0 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        r0.add_widget(Label(text="Partie", size_hint_x=0.3, color=TEXTE,
+                            font_size=dp(12)))
+        self.spin_partie = Spinner(
+            text="1", values=[str(i) for i in range(1, 11)])
+        self.spin_partie.bind(text=self._changer_partie)
+        r0.add_widget(self.spin_partie)
+        self.add_widget(r0)
+
+        r1 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        self.lbl_sample = Label(text="Sample 0", size_hint_x=0.45,
+                                color=TEXTE, font_size=dp(12))
+        r1.add_widget(self.lbl_sample)
+        self.sl_sample = Slider(min=0, max=199, value=0, step=1)
+        self.sl_sample.bind(value=self._changer_sample)
+        r1.add_widget(self.sl_sample)
+        self.add_widget(r1)
+
+        # grille de pas : deux rangees de huit
+        cadre = Panneau(orientation="vertical", size_hint_y=1,
+                        padding=dp(6), spacing=dp(4))
+        self.pas = []
+        for rangee in range(2):
+            ligne = BoxLayout(spacing=dp(3))
+            for col in range(8):
+                i = rangee * 8 + col
+                b = Bouton(text="%d" % (i + 1), font_size=dp(13), rayon=6)
+                b.bind(on_release=lambda w, idx=i: self._basculer(idx))
+                self.pas.append(b)
+                ligne.add_widget(b)
+            cadre.add_widget(ligne)
+        self.add_widget(cadre)
+
+        r2 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(4))
+        self.b_fonc = {}
+        for nom, libelle in (("loop", "Loop"), ("reverb", "Reverb"),
+                             ("reverse", "Rev."), ("mute", "Mute")):
+            b = Bouton(text=libelle, font_size=dp(11))
+            b.bind(on_release=lambda w, n=nom: self._basculer_fonction(n))
+            self.b_fonc[nom] = b
+            r2.add_widget(b)
+        self.add_widget(r2)
+
+        r3 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        self.lbl_niveau = Label(text="Niveau 127", size_hint_x=0.45,
+                                color=TEXTE, font_size=dp(12))
+        r3.add_widget(self.lbl_niveau)
+        self.sl_niveau = Slider(min=0, max=127, value=127, step=1)
+        self.sl_niveau.bind(value=self._changer_niveau)
+        r3.add_widget(self.sl_niveau)
+        self.add_widget(r3)
+
+        r4 = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(6))
+        for txt, fn in (("Vider partie", self._vider_partie),
+                        ("Tout vider", self._vider_tout)):
+            b = Bouton(text=txt, font_size=dp(12))
+            b.bind(on_release=lambda w, f=fn: f())
+            r4.add_widget(b)
+        self.add_widget(r4)
+
+        r5 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        b_o = Bouton(text="Ouvrir .dat", couleur=CYAN)
+        b_o.bind(on_release=lambda *_: Chooser(
+            self._ouvrir, filtres=["*.dat", "*.DAT"]).open())
+        r5.add_widget(b_o)
+        b_s = Bouton(text="Enregistrer")
+        b_s.bind(on_release=lambda *_: NomPopup(
+            "Nom du pattern", self.motif.nom, self._enregistrer).open())
+        r5.add_widget(b_s)
+        self.add_widget(r5)
+
+        r6 = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(6))
+        r6.add_widget(Label(text="Vers", size_hint_x=0.22, color=TEXTE,
+                            font_size=dp(12)))
+        self.spin_dest = Spinner(text="0", values=[str(i) for i in range(10)],
+                                 size_hint_x=0.28)
+        r6.add_widget(self.spin_dest)
+        self.b_env = Bouton(text="ENVOYER", couleur=ORANGE)
+        self.b_env.bind(on_release=lambda *_: self.envoyer())
+        r6.add_widget(self.b_env)
+        self.add_widget(r6)
+
+        self.lbl_etat = Label(text="", size_hint_y=None, height=dp(22),
+                              font_size=dp(11), color=TEXTE_2)
+        self.add_widget(self.lbl_etat)
+
+        self.rafraichir()
+        Clock.schedule_once(lambda *_: self._maj_syro(), 0.4)
+
+    # ------------------------------------------------------------ etat
+    def _maj_syro(self):
+        if not syro.disponible():
+            self.b_env.disabled = True
+            self.lbl_etat.text = "Envoi indisponible (lib native absente)"
+
+    def _p(self):
+        return self.motif.partie(self.partie)
+
+    def rafraichir(self):
+        p = self._p()
+        for i, b in enumerate(self.pas):
+            if p.pas_actif(i):
+                b.set_couleur(ORANGE)
+            else:
+                b.set_couleur(GRIS if i % 4 else ORANGE_S)
+        for nom, b in self.b_fonc.items():
+            b.set_couleur(CYAN if p.actif(nom) else GRIS)
+        self.lbl_sample.text = "Sample %d" % p.sample_num
+        self.lbl_niveau.text = "Niveau %d" % p.level
+        utilisees = len(self.motif.parties_utilisees())
+        self.lbl_etat.text = "%s - %d partie(s) utilisee(s)" % (
+            self.motif.nom, utilisees)
+
+    # ------------------------------------------------------------ edition
+    def _changer_partie(self, _sp, txt):
+        self.partie = int(txt)
+        p = self._p()
+        self.sl_sample.value = p.sample_num
+        self.sl_niveau.value = p.level
+        self.rafraichir()
+
+    def _basculer(self, i):
+        self._p().basculer_pas(i)
+        self.rafraichir()
+
+    def _basculer_fonction(self, nom):
+        p = self._p()
+        p.mettre(nom, not p.actif(nom))
+        self.rafraichir()
+
+    def _changer_sample(self, _sl, v):
+        self._p().sample_num = int(v)
+        self.lbl_sample.text = "Sample %d" % int(v)
+
+    def _changer_niveau(self, _sl, v):
+        self._p().level = int(v)
+        self.lbl_niveau.text = "Niveau %d" % int(v)
+
+    def _vider_partie(self):
+        self._p().depuis_liste([])
+        self.rafraichir()
+        self.journal("Partie %d videe." % self.partie)
+
+    def _vider_tout(self):
+        self.motif.vider()
+        self.rafraichir()
+        self.journal("Pattern vide.")
+
+    # ------------------------------------------------------------ fichiers
+    def _ouvrir(self, chemin):
+        try:
+            self.motif = pattern.Motif.charger(chemin)
+            self.spin_partie.text = "1"
+            self.partie = 1
+            self.sl_sample.value = self._p().sample_num
+            self.sl_niveau.value = self._p().level
+            self.rafraichir()
+            self.journal("Pattern charge : %s (%d parties)"
+                         % (self.motif.nom,
+                            len(self.motif.parties_utilisees())))
+        except Exception as e:  # noqa: BLE001
+            self.journal("Lecture impossible : %s" % e)
+
+    def _enregistrer(self, nom):
+        try:
+            self.motif.nom = nom
+            cible = os.path.join(dossier_travail(), "%s.dat" % nom)
+            self.motif.sauver(cible)
+            self.rafraichir()
+            self.journal("Pattern enregistre : %s" % cible)
+        except Exception as e:  # noqa: BLE001
+            self.journal("Enregistrement impossible : %s" % e)
+
+    # ------------------------------------------------------------ envoi
+    def envoyer(self):
+        if self.busy:
+            return
+        if not self.motif.parties_utilisees():
+            self.journal("Pattern vide : rien a envoyer.")
+            return
+        self.busy = True
+        self.b_env.disabled = True
+        threading.Thread(target=self._worker_envoi, daemon=True).start()
+
+    def _worker_envoi(self):
+        try:
+            dest = int(self.spin_dest.text)
+            self.journal("--- ENVOI DU PATTERN %d ---" % dest)
+            self.journal("Le pattern %d va etre ECRASE." % dest)
+            cible = os.path.join(dossier_travail(), "pattern.wav")
+            res = syro.pattern_stream([(dest, self.motif.to_bytes())], cible)
+            self.journal("Flux pret : %.1f s" % res["duree_s"])
+            self.journal("Casque vers SYNC IN, volume a fond.")
+            syro.jouer(res["chemin"])
+        except syro.SyroIndisponible as e:
+            self.journal("Envoi indisponible : %s" % e)
+        except Exception as e:  # noqa: BLE001
+            self.journal("ERREUR : %s" % e)
+        finally:
+            self._fin()
+
+    @mainthread
+    def _fin(self):
+        self.busy = False
+        self.b_env.disabled = not syro.disponible()
+
+
 class EcranTuto(BoxLayout):
     def __init__(self, **kw):
         super().__init__(orientation="vertical", spacing=dp(6), **kw)
@@ -1588,7 +1880,7 @@ class EcranTuto(BoxLayout):
 
 # --------------------------------------------------------------------------
 class Root(BoxLayout):
-    ONGLETS = ("TRAIT.", "SLOTS", "EDIT.", "TUTO")
+    ONGLETS = ("TRAIT.", "SLOTS", "EDIT.", "PATT.", "TUTO")
 
     def __init__(self, **kw):
         super().__init__(orientation="vertical", spacing=dp(6),
@@ -1611,7 +1903,7 @@ class Root(BoxLayout):
         barre = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(4))
         self.tabs = []
         for i, nom in enumerate(self.ONGLETS):
-            b = Bouton(text=nom, font_size=dp(12), rayon=6)
+            b = Bouton(text=nom, font_size=dp(11), rayon=6)
             b.bind(on_release=lambda w, idx=i: self.afficher(idx))
             self.tabs.append(b)
             barre.add_widget(b)
@@ -1633,6 +1925,7 @@ class Root(BoxLayout):
             EcranTraitement(self.journal),
             self.ec_slots,
             EcranEditeur(self.journal, lambda: self.ec_slots),
+            EcranPattern(self.journal, lambda: self.ec_slots),
             EcranTuto(),
         ]
         self.afficher(0)

@@ -109,9 +109,19 @@ class TestSyro(unittest.TestCase):
         src = os.path.join(self.tmp, "b.wav")
         make_wav(src, secs=0.1)
         with self.assertRaises(ValueError):
-            self.syro.build_stream([(100, src)], os.path.join(self.tmp, "x.wav"))
+            self.syro.build_stream([(200, src)], os.path.join(self.tmp, "x.wav"))
         with self.assertRaises(ValueError):
             self.syro.erase_stream([-1], os.path.join(self.tmp, "y.wav"))
+
+    def test_slot_sample2(self):
+        """Les emplacements 100 a 199 de la volca sample2 sont acceptes."""
+        src = os.path.join(self.tmp, "c.wav")
+        make_wav(src, secs=0.1)
+        res = self.syro.build_stream([(150, src)],
+                                     os.path.join(self.tmp, "s2.wav"))
+        self.assertEqual(res["slots"][0]["slot"], 150)
+        res = self.syro.erase_stream([199], os.path.join(self.tmp, "e2.wav"))
+        self.assertEqual(res["slots"][0]["slot"], 199)
 
     def test_liste_vide(self):
         with self.assertRaises(ValueError):
@@ -120,3 +130,34 @@ class TestSyro(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(compilateur() is None, "aucun compilateur C")
+class TestSyroPattern(TestSyro):
+    """Envoi de patterns, contre le faux SDK."""
+
+    def test_envoi_pattern(self):
+        from volca import pattern
+        m = pattern.vierge()
+        m.partie(1).depuis_liste([1, 5, 9, 13])
+        out = os.path.join(self.tmp, "pat.wav")
+        res = self.syro.pattern_stream([(0, m.to_bytes())], out)
+        self.assertTrue(os.path.isfile(out))
+        self.assertEqual(res["slots"][0]["slot"], 0)
+        self.assertEqual(res["slots"][0]["octets"], 0xA40)
+
+    def test_pattern_hors_limites(self):
+        from volca import pattern
+        m = pattern.vierge()
+        with self.assertRaises(ValueError):
+            self.syro.pattern_stream([(10, m.to_bytes())],
+                                     os.path.join(self.tmp, "p.wav"))
+
+    def test_taille_incorrecte_refusee(self):
+        with self.assertRaises(ValueError):
+            self.syro.pattern_stream([(0, b"\x00" * 100)],
+                                     os.path.join(self.tmp, "p.wav"))
+
+    def test_liste_vide(self):
+        with self.assertRaises(ValueError):
+            self.syro.pattern_stream([], os.path.join(self.tmp, "p.wav"))

@@ -19,8 +19,8 @@ import argparse
 import os
 import sys
 
-from volca import (__version__, audio, batch, etat, kit, project,
-                   reglages, syro, tips)
+from volca import (__version__, audio, batch, etat, kit, pattern,
+                   project, reglages, syro, tips)
 
 
 # ------------------------------------------------------------------ helpers
@@ -213,6 +213,30 @@ def cmd_projet(a):
         print(p.resume())
         return 0
 
+    if a.action == "renommer":
+        if a.slot is None or not a.titre:
+            print('Usage : projet renommer FICHIER SLOT --titre "Mon son"')
+            return 1
+        p = project.Projet.charger(a.nom)
+        s = p.renommer(a.slot, a.titre)
+        p.sauver()
+        print("slot %d : %s" % (s.index, s.nom))
+        return 0
+
+    if a.action == "modele":
+        p = project.Projet.charger(a.nom)
+        perdus = p.perdus_si(a.modele)
+        if perdus and not a.oui:
+            print("%d slot(s) seraient perdus :" % len(perdus))
+            for s in perdus:
+                print("  %03d %s" % (s.index, s.nom[:24]))
+            print("Relance avec --oui pour confirmer.")
+            return 1
+        p.changer_modele(a.modele)
+        p.sauver()
+        print(p.resume())
+        return 0
+
     if a.action == "tasser":
         p = project.Projet.charger(a.nom)
         n = p.tasser()
@@ -390,6 +414,59 @@ def cmd_kit(a):
     return 0
 
 
+def cmd_pattern(a):
+    if a.action == "infos":
+        m = pattern.Motif.charger(a.source)
+        print(m.resume())
+        print()
+        print(m.grille())
+        return 0
+
+    if a.action == "creer":
+        m = pattern.Motif.charger(a.base) if a.base else pattern.vierge()
+        m.nom = os.path.splitext(os.path.basename(a.source))[0]
+        if a.partie:
+            p = m.partie(a.partie)
+            if a.sample is not None:
+                p.sample_num = a.sample
+            if a.pas:
+                p.depuis_liste([int(x) for x in a.pas.split(",") if x.strip()])
+            for f in (a.fonctions or "").split(","):
+                f = f.strip()
+                if f in pattern.FONCTIONS:
+                    p.mettre(f)
+        m.sauver(a.source)
+        print(m.resume())
+        print()
+        print("Ecrit : %s (%d octets)" % (a.source, pattern.TAILLE))
+        return 0
+
+    if a.action == "vider":
+        m = pattern.Motif.charger(a.source)
+        if a.partie:
+            m.partie(a.partie).depuis_liste([])
+        else:
+            m.vider()
+        m.sauver(a.source)
+        print(m.resume())
+        return 0
+
+    # envoyer
+    m = pattern.Motif.charger(a.source)
+    if a.slot is None:
+        print("Precise le pattern de destination : --slot 0 a 9")
+        return 1
+    try:
+        res = syro.pattern_stream([(a.slot, m.to_bytes())],
+                                  a.sortie or "pattern.wav")
+    except syro.SyroIndisponible as e:
+        print("Envoi direct indisponible :\n%s" % e)
+        return 2
+    print("Pattern %d prepare depuis %s" % (a.slot, m.nom))
+    _apres_envoi(res, a.jouer)
+    return 0
+
+
 def cmd_syro(_a):
     if syro.disponible():
         print("Envoi direct : DISPONIBLE (%s)" % syro.version())
@@ -431,7 +508,7 @@ def build_parser():
     p.add_argument("action",
                    choices=["creer", "voir", "ajouter", "vider", "optimiser",
                             "egaliser", "deplacer", "echanger", "dupliquer",
-                            "tasser"])
+                            "tasser", "renommer", "modele"])
     p.add_argument("nom")
     p.add_argument("slot", nargs="?", type=int)
     p.add_argument("wav", nargs="?")
@@ -439,6 +516,9 @@ def build_parser():
     p.add_argument("--depart", type=int, default=0)
     p.add_argument("--modele", default="sample", choices=["sample", "sample2"])
     p.add_argument("--vers", type=int, help="slot destination")
+    p.add_argument("--titre", help="nouveau nom du slot")
+    p.add_argument("--oui", action="store_true",
+                   help="confirmer un changement destructeur")
     p.add_argument("--cible", type=float,
                    help="LUFS vise pour l'egalisation (defaut: automatique)")
     p.add_argument("-p", "--preset", default="punch",
@@ -491,6 +571,20 @@ def build_parser():
     p.add_argument("--brut", action="store_true",
                    help="exporter les sons non traites")
     p.set_defaults(func=cmd_kit)
+
+    p = sub.add_parser("pattern", help="patterns de la volca (10 x 16 pas)")
+    p.add_argument("action", choices=["infos", "creer", "vider", "envoyer"])
+    p.add_argument("source", help="fichier .dat")
+    p.add_argument("--base", help="partir d'un pattern existant")
+    p.add_argument("--partie", type=int, help="partie 1 a 10")
+    p.add_argument("--sample", type=int, help="numero de sample de la partie")
+    p.add_argument("--pas", help="pas actifs, ex: 1,5,9,13")
+    p.add_argument("--fonctions",
+                   help="loop,reverb,reverse,mute,motion (separes par ,)")
+    p.add_argument("--slot", type=int, help="pattern destination 0 a 9")
+    p.add_argument("-o", "--sortie")
+    p.add_argument("--jouer", action="store_true")
+    p.set_defaults(func=cmd_pattern)
 
     p = sub.add_parser("syro", help="tester l'envoi direct")
     p.set_defaults(func=cmd_syro)

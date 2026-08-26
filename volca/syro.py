@@ -29,13 +29,20 @@ TYPE_ERASE = 1
 TYPE_PATTERN = 2
 
 ERREURS = {
-    -1: "SyroVolcaSample_Start a echoue (donnees trop grosses ? slot invalide ?)",
+    -1: ("SyroVolcaSample_Start a echoue. Causes possibles : donnees trop "
+         "grosses, ou slot au-dela de 99 refuse par le SDK (le SDK d'origine "
+         "vise la volca sample ; verifie s'il gere la sample2)."),
     -2: "memoire insuffisante",
     -3: "erreur pendant le rendu du flux",
     -4: "aucune donnee a envoyer",
 }
 
 STREAM_RATE = 44100  # le flux Syro est toujours en 44100 stereo 16 bits
+
+# La volca sample a 100 emplacements, la sample2 en a 200.
+# On laisse passer jusqu'a 199 : si le SDK Korg refuse au-dela de 99,
+# l'erreur remontera clairement plutot que d'etre bloquee ici.
+SLOT_MAX = 199
 
 
 class SyroIndisponible(RuntimeError):
@@ -204,8 +211,9 @@ def build_stream(slots, out_path, compress=True, quality=16,
     detail = []
 
     for i, (num, chemin) in enumerate(slots):
-        if not 0 <= num <= 99:
-            raise ValueError("slot hors limites : %d" % num)
+        if not 0 <= num <= SLOT_MAX:
+            raise ValueError("slot hors limites : %d (max %d)"
+                             % (num, SLOT_MAX))
         s = audio.read_wav(chemin)
         if preset:
             s, _ = audio.process(s, preset, gain_db)
@@ -231,6 +239,49 @@ def build_stream(slots, out_path, compress=True, quality=16,
     return _rendre(lib, items, len(slots), out_path, detail)
 
 
+PATTERN_MAX = 9         # la volca a 10 patterns, numerotes 0 a 9
+PATTERN_TAILLE = 0xA40  # doit correspondre a volca.pattern.TAILLE
+
+
+def pattern_stream(patterns, out_path):
+    """Genere le WAV qui envoie des patterns a la volca.
+
+    patterns : liste de (numero_pattern 0-9, donnees 2624 octets)
+    Les donnees viennent de volca.pattern.Motif.to_bytes().
+    """
+    lib = _charger()
+    if lib is None:
+        raise SyroIndisponible(raison_indisponible())
+    if not patterns:
+        raise ValueError("aucun pattern a envoyer")
+
+    items = (VGData * len(patterns))()
+    buffers = []
+    detail = []
+
+    for i, (num, donnees) in enumerate(patterns):
+        if not 0 <= num <= PATTERN_MAX:
+            raise ValueError("pattern hors limites : %d (max %d)"
+                             % (num, PATTERN_MAX))
+        if len(donnees) != PATTERN_TAILLE:
+            raise ValueError("pattern %d : %d octets au lieu de %d"
+                             % (num, len(donnees), PATTERN_TAILLE))
+        buf = (ctypes.c_uint8 * len(donnees)).from_buffer_copy(donnees)
+        buffers.append(buf)
+
+        items[i].type = TYPE_PATTERN
+        items[i].number = num
+        items[i].quality = 16
+        items[i].compress = 0
+        items[i].fs = STREAM_RATE
+        items[i].size = len(donnees)
+        items[i].data = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint8))
+        detail.append({"slot": num, "nom": "pattern %d" % num,
+                       "octets": len(donnees)})
+
+    return _rendre(lib, items, len(patterns), out_path, detail)
+
+
 def erase_stream(indices, out_path):
     """Genere le WAV qui efface les slots donnes."""
     lib = _charger()
@@ -242,8 +293,9 @@ def erase_stream(indices, out_path):
 
     items = (VGData * len(indices))()
     for i, num in enumerate(indices):
-        if not 0 <= num <= 99:
-            raise ValueError("slot hors limites : %d" % num)
+        if not 0 <= num <= SLOT_MAX:
+            raise ValueError("slot hors limites : %d (max %d)"
+                             % (num, SLOT_MAX))
         items[i].type = TYPE_ERASE
         items[i].number = num
         items[i].quality = 16

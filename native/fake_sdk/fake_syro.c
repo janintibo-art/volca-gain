@@ -8,7 +8,10 @@ SyroStatus SyroVolcaSample_Start(SyroHandle *pH, SyroData *pD, int n, uint32_t f
     if(pD[i].DataType==DataType_Sample_Erase){ tot+=4410; }
     else { if(!pD[i].pData||!pD[i].Size) return Status_IllegalDataType;
            tot += pD[i].Size/2 + 4410; }
-    if(pD[i].Number>99) return Status_OutOfRange;
+    if(pD[i].DataType==DataType_Pattern){
+      if(pD[i].Number>9) return Status_OutOfRange;
+      if(pD[i].Size!=0xA40) return Status_IllegalDataType;
+    } else if(pD[i].Number>199) return Status_OutOfRange;
   }
   k=(Fake*)calloc(1,sizeof(Fake)); k->total=tot; k->checksum=(uint32_t)n;
   *pH=(SyroHandle)k; *pF=tot; return Status_Success;
