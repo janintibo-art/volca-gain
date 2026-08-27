@@ -180,130 +180,151 @@ RACCOURCIS_ANDROID = [
     ("Musique", "/storage/emulated/0/Music"),
     ("Musique", "/sdcard/Music"),
     ("Documents", "/storage/emulated/0/Documents"),
-    ("Enregistrements", "/storage/emulated/0/Recordings"),
     ("Stockage interne", "/storage/emulated/0"),
     ("Stockage interne", "/sdcard"),
-    ("Carte SD", "/storage/sdcard1"),
 ]
 
 
-_LECTEUR = {"son": None}
+IGNORES_VOLUME = ("emulated", "self", "container", "sdcard0", "enc_emulated")
 
 
-def arreter_lecture():
-    son = _LECTEUR.get("son")
-    if son is not None:
-        try:
-            son.stop()
-            son.unload()
-        except Exception:  # noqa: BLE001
-            pass
-        _LECTEUR["son"] = None
+def _points_de_montage():
+    """Points de montage sous /storage et /mnt/media_rw, lus dans /proc/mounts.
 
-
-def jouer_sample(sample, nom="apercu"):
-    """Ecrit le son dans un fichier temporaire et le joue."""
-    arreter_lecture()
-    chemin = os.path.join(TMP, "%s.wav" % nom)
-    audio.write_wav(chemin, sample)
-    from kivy.core.audio import SoundLoader
-    son = SoundLoader.load(chemin)
-    if son is None:
-        raise RuntimeError("lecteur audio indisponible")
-    son.volume = 1.0
-    son.play()
-    _LECTEUR["son"] = son
-    return son
-
-
-def dossier_sortie(source):
-    """Ou ecrire les fichiers traites.
-
-    Sur Android, ecrire dans un espace partage est refuse meme quand la
-    lecture y est autorisee, et le refus ne se manifeste qu'au moment
-    d'ecrire un vrai fichier audio. On ecrit donc toujours dans le
-    dossier de l'application, sauf si la source y est deja.
-
-    Le sondage se fait avec un vrai .wav : un fichier sans extension
-    passe parfois la ou un audio est refuse.
+    Android refuse os.listdir('/storage') meme avec l'acces complet, alors
+    que la traversee vers /storage/XXXX-XXXX fonctionne. /proc/mounts, lui,
+    est lisible par tout le monde : c'est la seule source fiable.
     """
-    base = os.path.basename(source.rstrip("/\\")) or "sortie"
-    interne = os.path.join(dossier_travail(), "volca_out", base)
+    out = []
+    try:
+        with open("/proc/mounts", "r", encoding="utf-8",
+                  errors="replace") as f:
+            lignes = f.readlines()
+    except Exception:  # noqa: BLE001
+        return out
+    for ligne in lignes:
+        champs = ligne.split()
+        if len(champs) < 2:
+            continue
+        # /proc/mounts echappe les espaces et quelques autres caracteres.
+        point = champs[1]
+        for code, vrai in (("\\040", " "), ("\\011", "\t"),
+                           ("\\012", "\n"), ("\\134", "\\")):
+            point = point.replace(code, vrai)
+        for base in ("/storage/", "/mnt/media_rw/"):
+            if point.startswith(base):
+                nom = point[len(base):]
+                if nom and "/" not in nom and nom not in IGNORES_VOLUME:
+                    out.append(point)
+    return out
 
-    essais = []
-    if not IS_ANDROID or source.startswith(dossier_travail()):
-        essais.append(os.path.join(source, "volca_out"))
-    essais.append(interne)
 
-    for chemin in essais:
+def cartes_sd():
+    """Volumes amovibles montes, du type /storage/XXXX-XXXX.
+
+    Deux sources : /proc/mounts d'abord, puis le listage des dossiers en
+    complement. Le listage echoue silencieusement sur beaucoup d'appareils ;
+    c'est pour ca qu'il ne vient qu'en second.
+    """
+    out, vus = [], set()
+
+    def ajouter(chemin):
+        if chemin in vus:
+            return
+        if os.path.isdir(chemin):
+            vus.add(chemin)
+            out.append(("Carte SD", chemin))
+
+    for chemin in _points_de_montage():
+        ajouter(chemin)
+
+    for base in ("/storage", "/mnt/media_rw"):
         try:
-            os.makedirs(chemin, exist_ok=True)
-            temoin = os.path.join(chemin, "_test_ecriture.wav")
-            with open(temoin, "wb") as f:
-                f.write(b"RIFF\x00\x00\x00\x00WAVE")
-            os.remove(temoin)
-            return chemin
+            noms = sorted(os.listdir(base))
         except Exception:  # noqa: BLE001
             continue
-    return interne
+        for n in noms:
+            if n in IGNORES_VOLUME:
+                continue
+            ajouter(os.path.join(base, n))
+    return out
 
 
-def demander_acces_total():
-    """Ouvre l'ecran systeme "Acces a tous les fichiers".
-
-    Android 11 et plus : la permission de stockage ordinaire ne suffit
-    plus pour parcourir les dossiers. Il faut cet ecran a part, que
-    l'utilisateur doit valider a la main.
-    Sur Android 10, c'est le drapeau requestLegacyExternalStorage du
-    manifeste qui fait le travail, et cette fonction ne sert a rien.
-    """
-    if not IS_ANDROID:
-        return "hors Android"
+def lisible(chemin):
     try:
-        from jnius import autoclass
-        version = autoclass("android.os.Build$VERSION")
-        if version.SDK_INT < 30:
-            return "Android %d : l'acces devrait deja fonctionner" % \
-                version.SDK_INT
-        Environment = autoclass("android.os.Environment")
-        if Environment.isExternalStorageManager():
-            return "acces complet deja accorde"
-        Intent = autoclass("android.content.Intent")
-        Settings = autoclass("android.provider.Settings")
-        Uri = autoclass("android.net.Uri")
-        activite = autoclass("org.kivy.android.PythonActivity").mActivity
-        intent = Intent(
-            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-            Uri.parse("package:" + activite.getPackageName()))
-        activite.startActivity(intent)
-        return "ecran systeme ouvert : autorise, puis reviens"
-    except Exception as e:  # noqa: BLE001
-        return "impossible : %s" % e
+        os.listdir(chemin)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def raccourcis():
-    """Dossiers utiles qui existent vraiment sur cet appareil."""
+    """Dossiers utiles qui existent vraiment sur cet appareil.
+
+    La carte SD passe juste apres Telechargements et Musique : c'est le
+    raccourci le plus demande, et la barre n'en montre que cinq.
+    """
     out, vus = [], set()
+
+    def ajouter(nom, chemin):
+        if nom not in vus and os.path.isdir(chemin):
+            out.append((nom, chemin))
+            vus.add(nom)
+
     if IS_ANDROID:
-        for nom, p in RACCOURCIS_ANDROID:
-            if nom not in vus and os.path.isdir(p):
-                out.append((nom, p))
-                vus.add(nom)
-        # cartes SD montees sous /storage/XXXX-XXXX
-        try:
-            for n in sorted(os.listdir("/storage")):
-                p = os.path.join("/storage", n)
-                if n not in ("emulated", "self") and os.path.isdir(p):
-                    if not any(c[1] == p for c in out):
-                        out.append(("Carte %s" % n, p))
-        except Exception:  # noqa: BLE001
-            pass
+        for nom in ("Telechargements", "Musique"):
+            for n, p in RACCOURCIS_ANDROID:
+                if n == nom:
+                    ajouter(n, p)
+        for i, (nom, chemin) in enumerate(cartes_sd()):
+            ajouter("Carte SD" if i == 0 else "Carte %d" % (i + 1), chemin)
+        for nom in ("Documents", "Stockage interne"):
+            for n, p in RACCOURCIS_ANDROID:
+                if n == nom:
+                    ajouter(n, p)
     else:
-        for nom, p in (("Accueil", os.path.expanduser("~")),
-                       ("Courant", os.getcwd())):
-            if os.path.isdir(p):
-                out.append((nom, p))
+        ajouter("Accueil", os.path.expanduser("~"))
+        ajouter("Courant", os.getcwd())
     return out
+
+
+def diagnostic_stockage():
+    """Ce qu'Android autorise vraiment, volume par volume."""
+    lignes = []
+    try:
+        from jnius import autoclass
+        version = autoclass("android.os.Build$VERSION")
+        lignes.append("Android SDK %d" % version.SDK_INT)
+        if version.SDK_INT >= 30:
+            Environment = autoclass("android.os.Environment")
+            lignes.append("acces complet : %s"
+                          % ("OUI" if Environment.isExternalStorageManager()
+                             else "NON"))
+    except Exception as e:  # noqa: BLE001
+        lignes.append("jnius indisponible : %s" % e)
+
+    for base in ("/storage", "/mnt/media_rw"):
+        try:
+            noms = sorted(os.listdir(base))
+            lignes.append("%s : %s" % (base, ", ".join(noms) or "vide"))
+        except Exception as e:  # noqa: BLE001
+            lignes.append("%s : refuse (%s)" % (base, type(e).__name__))
+
+    montes = _points_de_montage()
+    lignes.append("/proc/mounts : %s" % (", ".join(montes) or "aucun volume"))
+
+    for nom, chemin in cartes_sd():
+        if lisible(chemin):
+            try:
+                n = len(os.listdir(chemin))
+            except Exception:  # noqa: BLE001
+                n = 0
+            lignes.append("%s : LISIBLE, %d element(s)" % (chemin, n))
+        else:
+            lignes.append("%s : REFUSE par Android" % chemin)
+    if not cartes_sd():
+        lignes.append("aucun volume amovible detecte")
+    return "\n".join(lignes)
 
 
 def default_dir():
@@ -767,19 +788,26 @@ class Chooser(Popup):
         courts = raccourcis()
         if courts:
             barre = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(4))
-            for nom, chemin in courts[:4]:
-                b = Bouton(text=nom, font_size=dp(10), couleur=GRIS_CHOIX)
+            for nom, chemin in courts[:5]:
+                ok = lisible(chemin)
+                b = Bouton(text=nom, font_size=dp(9),
+                           couleur=GRIS_CHOIX if ok else GRIS)
                 b.bind(on_release=lambda w, c=chemin: self._aller(c))
                 barre.add_widget(b)
             box.add_widget(barre)
 
         if IS_ANDROID:
+            r_acc = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(4))
             b_acces = Bouton(text="Autoriser l'acces aux fichiers",
-                             font_size=dp(11), couleur=VERT,
-                             size_hint_y=None, height=dp(36))
+                             font_size=dp(11), couleur=VERT)
             b_acces.bind(on_release=lambda *_: setattr(
                 self.lbl, "text", demander_acces_total()))
-            box.add_widget(b_acces)
+            r_acc.add_widget(b_acces)
+            b_diag = Bouton(text="Diagnostic", font_size=dp(10),
+                            size_hint_x=0.34)
+            b_diag.bind(on_release=lambda *_: self._diagnostic())
+            r_acc.add_widget(b_diag)
+            box.add_widget(r_acc)
 
         self.chooser = FileChooserListView(
             path=start or default_dir(), dirselect=dossiers,
@@ -810,6 +838,12 @@ class Chooser(Popup):
         row.add_widget(b_ok)
         box.add_widget(row)
         self.add_widget(box)
+
+    def _diagnostic(self):
+        texte = diagnostic_stockage()
+        self.lbl.text = texte.replace("\n", "   |   ")
+        self.champ.text = texte.splitlines()[-1] if texte else ""
+        print("DIAGNOSTIC STOCKAGE\n" + texte)
 
     def _ecouter_selection(self, _w, selection):
         """Fait entendre le WAV des qu'on appuie dessus : on evite ainsi
@@ -842,8 +876,12 @@ class Chooser(Popup):
             try:
                 os.listdir(chemin)
             except PermissionError:
-                self.lbl.text = ("Acces refuse par Android. Appuie sur "
-                                 "Autoriser l'acces aux fichiers.")
+                if chemin.startswith("/storage/") and "emulated" not in chemin:
+                    self.lbl.text = ("Carte SD refusee par Android. Appuie "
+                                     "sur Diagnostic pour en savoir plus.")
+                else:
+                    self.lbl.text = ("Acces refuse. Appuie sur Autoriser "
+                                     "l'acces aux fichiers.")
                 return
             except Exception as e:  # noqa: BLE001
                 self.lbl.text = "Dossier illisible : %s" % e
@@ -1942,6 +1980,16 @@ class EcranSlots(BoxLayout):
         r1.add_widget(b_m)
         self.contenu.add_widget(r1)
 
+        r_korg = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        b_korg = Bouton(text="Importer une sauvegarde Korg", couleur=VERT,
+                        font_size=dp(12))
+        b_korg.bind(on_release=lambda *_: Chooser(
+            self.importer_librairie,
+            filtres=["*.vlcspllib", "*.VLCSPLLIB", "*.vlcsplpatt",
+                     "*.VLCSPLPATT", "*.zip"]).open())
+        r_korg.add_widget(b_korg)
+        self.contenu.add_widget(r_korg)
+
         r1b = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
         b_eg = Bouton(text="Egaliser le kit", couleur=VERT)
         b_eg.bind(on_release=lambda *_: self._egaliser())
@@ -2551,7 +2599,8 @@ class EcranPattern(BoxLayout):
         corps.add_widget(r_ec)
 
         r5 = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
-        b_o = Bouton(text="Ouvrir", couleur=CYAN)
+        b_o = Bouton(text="Ouvrir .dat / Korg", couleur=CYAN,
+                     font_size=dp(12))
         b_o.bind(on_release=lambda *_: Chooser(
             self._ouvrir, filtres=["*.dat", "*.DAT", "*.vlcsplpatt",
                                    "*.VLCSPLPATT", "*.vlcspllib",
@@ -2562,6 +2611,16 @@ class EcranPattern(BoxLayout):
             "Nom du pattern", self.motif.nom, self._enregistrer).open())
         r5.add_widget(b_s)
         corps.add_widget(r5)
+
+        r_kp = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        b_kp = Bouton(text="Importer un pattern Korg", couleur=VERT,
+                      font_size=dp(12))
+        b_kp.bind(on_release=lambda *_: Chooser(
+            self._ouvrir,
+            filtres=["*.vlcsplpatt", "*.VLCSPLPATT", "*.vlcspllib",
+                     "*.VLCSPLLIB"]).open())
+        r_kp.add_widget(b_kp)
+        corps.add_widget(r_kp)
 
         r6 = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(6))
         r6.add_widget(Label(text="Vers", size_hint_x=0.22, color=TEXTE,
