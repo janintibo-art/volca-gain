@@ -121,6 +121,13 @@ transfert.
 Un zip contenant les sons traités **et** leur placement dans les slots. De quoi
 changer de téléphone ou partager un kit complet.
 
+### Trouver ses fichiers
+
+Le sélecteur a une barre de raccourcis : Téléchargements, Musique, **Carte SD**,
+Documents, Stockage interne. Un raccourci grisé signale un dossier qu'Android
+refuse ; le bouton **Diagnostic** dit alors ce qui bloque. En dernier recours,
+le chemin complet se tape à la main.
+
 ---
 
 ## Installation
@@ -219,8 +226,6 @@ uniquement à l'affichage.
 
 ## Limites connues
 
-- L'accès à la **carte SD** sur Android n'est pas fiable selon les appareils.
-  Contournement : copier les fichiers vers Téléchargements.
 - Les patterns **sample2** sont lisibles mais pas envoyables.
 - L'écoute est **mono** : le panoramique n'est pas simulé.
 
