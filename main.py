@@ -327,6 +327,43 @@ def diagnostic_stockage():
     return "\n".join(lignes)
 
 
+def demander_acces_total():
+    """Ouvre l'ecran systeme « acces a tous les fichiers ».
+
+    Renvoie le message a afficher. Ne leve jamais : c'est le bouton de
+    secours, il doit toujours repondre quelque chose.
+    """
+    if not IS_ANDROID:
+        return "rien a autoriser sur cette plateforme"
+    try:
+        from jnius import autoclass
+        version = autoclass("android.os.Build$VERSION")
+        if version.SDK_INT < 30:
+            return ("Android %d : cet ecran n'existe pas, l'autorisation "
+                    "Fichiers suffit" % version.SDK_INT)
+        Environment = autoclass("android.os.Environment")
+        if Environment.isExternalStorageManager():
+            return "acces complet deja accorde"
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        Intent = autoclass("android.content.Intent")
+        Settings = autoclass("android.provider.Settings")
+        Uri = autoclass("android.net.Uri")
+        activite = PythonActivity.mActivity
+        try:
+            intent = Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:" + activite.getPackageName()))
+            activite.startActivity(intent)
+        except Exception:  # noqa: BLE001
+            # Certains constructeurs refusent l'intent cible : on retombe
+            # sur la liste generale, ou l'application est a chercher.
+            activite.startActivity(
+                Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        return "ecran systeme ouvert : autorise, puis reviens"
+    except Exception as e:  # noqa: BLE001
+        return "impossible d'ouvrir l'ecran : %s" % e
+
+
 def default_dir():
     r = raccourcis()
     return r[0][1] if r else os.path.expanduser("~")
@@ -338,10 +375,87 @@ def dossier_travail():
     return os.getcwd()
 
 
+def dossier_sortie(source):
+    """Ou ecrire les samples traites : un sous-dossier volca_out.
+
+    Sur Android il est place dans le dossier de travail de l'application,
+    pas a cote de la source : Android refuse qu'une application ecrive
+    des fichiers audio dans un espace partage comme Telechargements,
+    meme quand la lecture y est autorisee. Ailleurs, a cote de la source.
+    """
+    base = source or ""
+    if IS_ANDROID or not base:
+        base = dossier_travail()
+    elif os.path.isfile(base):
+        base = os.path.dirname(base) or os.getcwd()
+    dst = os.path.join(base, "volca_out")
+    try:
+        os.makedirs(dst, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        dst = os.path.join(dossier_travail(), "volca_out")
+        os.makedirs(dst, exist_ok=True)
+    return dst
+
+
 def mmss(secondes):
     if secondes < 0:
         secondes = 0
     return "%d:%06.3f" % (int(secondes // 60), secondes % 60)
+
+
+# --------------------------------------------------------------------------
+# Lecture audio partagee
+# --------------------------------------------------------------------------
+# Un seul son a la fois dans toute l'application : les onglets se relaient
+# sur ce lecteur unique. L'editeur garde le sien, parce qu'il doit suivre
+# la tete de lecture pas a pas.
+_LECTURE = {"son": None}
+
+
+def _nom_fichier_lecture(nom):
+    net = "".join(c for c in str(nom) if c.isalnum() or c in "-_")
+    return net[:24] or "apercu"
+
+
+def arreter_lecture():
+    """Coupe le son en cours s'il y en a un. Ne leve jamais.
+
+    Appelee a chaque changement d'onglet et sur tous les boutons stop :
+    si elle plantait, elle emporterait l'interface avec elle.
+    """
+    son = _LECTURE.get("son")
+    _LECTURE["son"] = None
+    if son is None:
+        return
+    for methode in ("stop", "unload"):
+        try:
+            getattr(son, methode)()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def jouer_sample(sample, nom="apercu"):
+    """Ecrit le sample dans un WAV temporaire et le joue.
+
+    `nom` donne un fichier distinct par onglet : reecrire un fichier
+    qu'un lecteur tient encore ouvert echoue en silence sur Android.
+
+    Leve en cas d'echec — tous les appelants attrapent et journalisent.
+    """
+    arreter_lecture()
+    chemin = os.path.join(TMP, "lecture_%s.wav" % _nom_fichier_lecture(nom))
+    audio.write_wav(chemin, sample)
+    from kivy.core.audio import SoundLoader
+    son = SoundLoader.load(chemin)
+    if son is None:
+        raise RuntimeError("lecteur audio indisponible")
+    try:
+        son.volume = 1.0
+    except Exception:  # noqa: BLE001
+        pass
+    son.play()
+    _LECTURE["son"] = son
+    return son
 
 
 # --------------------------------------------------------------------------
