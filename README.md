@@ -1,7 +1,8 @@
 # MOC'TA BASS
 
-Traitement du son **et** transfert direct pour la **Korg volca sample** et la
-**volca sample2**. Sur Android et Windows. Le librarian Korg devient inutile.
+Traitement du son, séquences **et** transfert direct pour la **Korg volca
+sample** et la **volca sample2**. Sur Android et Windows. Le librarian Korg
+devient inutile.
 
 ---
 
@@ -17,6 +18,20 @@ par SYNC IN.
 
 Sur un kick enregistré à -32,8 dB RMS : **+27 dB** récupérés, crête maîtrisée à
 -0,2 dB, aucun écrêtage.
+
+---
+
+## Sept onglets
+
+| Onglet | Rôle |
+|---|---|
+| **TRAIT.** | traitement par lot d'un dossier, écoute avant / après |
+| **SLOTS** | les 100 ou 200 emplacements, envoi, kits, import Korg |
+| **EDIT.** | forme d'onde, découpe, A/B, réglages fins |
+| **PATT.** | les 10 patterns, 16 pas, motions |
+| **MORC.** | enchaîner des patterns, écouter, exporter |
+| **BIBLI.** | réserve illimitée de patterns et de sons |
+| **TUTO** | 22 sections de documentation intégrée |
 
 ---
 
@@ -50,6 +65,9 @@ moyenne, ou **side** qui isole ce qui n'est pas au centre).
 100 emplacements sur volca sample, **200 sur sample2**. Preset et gain par
 slot, renommage, déplacement, échange, duplication.
 
+- **Remplissage automatique** — un dossier entier trouve sa place dans les
+  slots libres, à partir du numéro voulu, avec le preset choisi.
+- **Envoi groupé** — plusieurs slots dans un seul flux, avec compte à rebours.
 - **Optimiser** — détecte les samples sans aigu et réduit leur taux
   d'échantillonnage. Jusqu'à 64 % de mémoire libérée sur un son sombre.
 - **Égaliser le kit** — aligne le niveau perçu de tous les slots pour que les
@@ -61,6 +79,36 @@ slot, renommage, déplacement, échange, duplication.
 Les 10 patterns de la machine, 10 parties × 16 pas. Numéro de sample, niveau,
 et les fonctions Loop / Reverb / Reverse / Mute par partie. Format Korg
 respecté à l'octet près : les patterns d'usine du SDK s'ouvrent tels quels.
+
+- **Motions** — les potards automatisés pas par pas, sur quatorze pistes.
+- **Écoute fidèle** — le rendu reproduit l'effet réel des potards de chaque
+  partie, motions comprises, au lieu de jouer les sons bruts.
+- **Swing** à l'écoute, réglable. Il n'est pas transféré : la machine a son
+  propre réglage.
+
+Les patterns de la **sample2** (7936 octets) sont lus et affichés. Ils ne sont
+pas envoyables : le SDK Korg embarqué ne gère que le format de première
+génération.
+
+### Morceau
+
+Enchaîner des patterns en sections répétées, écouter le tout, et exporter :
+
+- **export en un seul WAV** du morceau complet ;
+- **export en pistes** — un fichier par partie, équilibre relatif conservé, de
+  quoi finir le mixage ailleurs ;
+- **plan d'envoi** — ce qu'il faut transférer, patterns et samples manquants
+  compris.
+
+### Bibliothèque
+
+Une réserve sans limite de patterns et de sons, hors des 100 slots. On y range,
+on y cherche, on renomme, et on repioche dans un projet.
+
+### Import des sauvegardes Korg
+
+Les fichiers `.vlcspllib` et `.vlcsplpatt` du librarian officiel s'ouvrent
+directement : sons et patterns récupérés, avec leurs noms.
 
 ### Envoi direct
 
@@ -87,17 +135,23 @@ inconnues à la première installation).
 
 ## Ligne de commande
 
-Tout est aussi disponible en console, **sans aucune dépendance** :
+Tout le cœur est aussi disponible en console, **sans aucune dépendance** :
 
 ```bash
 python cli.py info samples/                      # repérer les sons faibles
+python cli.py presets
 python cli.py traiter samples/ -o out/ -p punch
 python cli.py projet creer mon_kit --dossier out/
 python cli.py projet egaliser mon_kit.volca.json
 python cli.py projet optimiser mon_kit.volca.json
+python cli.py memoire mon_kit.volca.json
 python cli.py envoyer mon_kit.volca.json --jouer
+python cli.py rapide kick.wav 0 --jouer
+python cli.py effacer 0-9
 python cli.py pattern infos preset_pattern_01.dat
+python cli.py librairie sauvegarde.vlcspllib
 python cli.py kit exporter mon_kit.volca.json
+python cli.py syro                               # envoi direct disponible ?
 python cli.py tuto
 ```
 
@@ -138,22 +192,37 @@ désactivé.
 ## Architecture
 
 ```
-volca/          logique métier, Python standard sans aucune dépendance
-├── audio.py    moteur DSP
-├── project.py  les 100 ou 200 slots
-├── pattern.py  format des patterns
-├── syro.py     envoi direct (ctypes)
-├── kit.py      kits portables
-└── tips.py     contenu du tutoriel
+volca/              logique métier, Python standard sans aucune dépendance
+├── audio.py        moteur DSP (filtres, compresseur, limiteur, LUFS)
+├── project.py      les 100 ou 200 slots, appariement de fichiers
+├── pattern.py      format Korg des patterns, motions, rendu audio
+├── morceau.py      enchaînement de patterns, export, plan d'envoi
+├── bibliotheque.py réserve de patterns et de sons
+├── kit.py          kits portables (zip autonome)
+├── librarian.py    import des sauvegardes .vlcspllib et .vlcsplpatt
+├── syro.py         envoi direct via ctypes
+├── reglages.py     presets personnalisés
+├── etat.py         dernier projet ouvert
+├── batch.py        traitement par lot
+└── tips.py         contenu du tutoriel
 
-native/         couche C au-dessus du SDK Korg (+ un faux SDK pour les tests)
-main.py         interface Kivy
-cli.py          interface console
-tests/          136 tests
+native/             couche C au-dessus du SDK Korg (+ un faux SDK pour les tests)
+main.py             interface Kivy
+cli.py              interface console
+tests/              274 tests
 ```
 
 Le cœur ne dépend de rien : il tourne dans Termux tel quel. Kivy sert
 uniquement à l'affichage.
+
+---
+
+## Limites connues
+
+- L'accès à la **carte SD** sur Android n'est pas fiable selon les appareils.
+  Contournement : copier les fichiers vers Téléchargements.
+- Les patterns **sample2** sont lisibles mais pas envoyables.
+- L'écoute est **mono** : le panoramique n'est pas simulé.
 
 ---
 

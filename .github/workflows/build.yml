@@ -240,9 +240,9 @@ jobs:
           body: |
             # MOC'TA BASS ${{ github.ref_name }}
 
-            Traitement du son **et** transfert direct pour la **Korg volca
-            sample** et la **volca sample2**. Le librarian Korg devient
-            inutile.
+            Traitement du son, sequences **et** transfert direct pour la
+            **Korg volca sample** et la **volca sample2**. Le librarian Korg
+            devient inutile.
 
             ## Installation
 
@@ -252,21 +252,42 @@ jobs:
             **Windows** : telecharge le `.zip`, decompresse, lance
             `MOC'TA BASS.exe`.
 
+            ## Le probleme resolu
+
+            Le librarian officiel plafonne LEVEL a 100 %, il ne peut que
+            baisser le volume. Un sample trop faible reste trop faible. Ici,
+            le traitement se fait AVANT le transfert. Sur un kick a
+            -32,8 dB RMS : **+27 dB recuperes**, sans ecretage.
+
+            ## Sept onglets
+
+            | Onglet | Role |
+            |---|---|
+            | TRAIT. | traitement par lot d'un dossier, ecoute avant / apres |
+            | SLOTS | les 100 ou 200 emplacements, envoi, kits, import Korg |
+            | EDIT. | forme d'onde, decoupe, A/B, reglages fins |
+            | PATT. | les 10 patterns, 16 pas, motions |
+            | MORC. | enchainer des patterns, ecouter, exporter |
+            | BIBLI. | reserve illimitee de patterns et de sons |
+            | TUTO | 22 sections de documentation integree |
+
             ## Ce que ca fait
 
-            **Le probleme resolu** : le librarian officiel plafonne LEVEL a
-            100 %, il ne peut que baisser le volume. Un sample trop faible
-            reste trop faible. Ici, le traitement se fait AVANT le transfert.
-            Sur un kick a -32,8 dB RMS : **+27 dB recuperes**, sans ecretage.
-
             - **Traitement** : passe-haut, transient shaper, compresseur,
-              saturation, porte de bruit, limiteur. Six presets, onze
-              reglages fins, presets personnalises.
+              saturation, porte de bruit, limiteur, mise a niveau RMS ou
+              LUFS. Six presets, onze reglages fins, presets personnalises.
             - **Editeur** : forme d'onde, decoupe calee sur les passages par
-              zero, comparaison A/B, annulation.
+              zero, comparaison A/B, annulation sur douze niveaux.
             - **Slots** : 100 sur sample, 200 sur sample2. Renommage,
-              rangement, optimisation memoire, egalisation du kit.
-            - **Patterns** : les 10 sequences de 16 pas, format Korg.
+              rangement, remplissage automatique d'un dossier entier,
+              optimisation memoire, egalisation du kit, envoi groupe.
+            - **Patterns** : les 10 sequences de 16 pas au format Korg, avec
+              les **motions** sur quatorze pistes. L'ecoute reproduit
+              l'effet reel des potards de chaque partie, et le swing.
+            - **Morceau** : enchainer des patterns en sections repetees,
+              ecouter, exporter en un seul WAV ou **en pistes separees**.
+            - **Bibliotheque** : une reserve sans limite de patterns et de
+              sons, hors des 100 slots.
             - **Import des sauvegardes du librarian** (`.vlcspllib` et
               `.vlcsplpatt`) : sons, noms et placement restaures.
             - **Envoi direct** par SYNC IN, avec compte a rebours.
@@ -278,11 +299,13 @@ jobs:
             fond, Bluetooth coupe, aucun egaliseur. L'envoi ecrase le slot
             de destination sans confirmation.
 
-            ## Bon a savoir
+            ## Limites connues
 
             L'envoi s'appuie sur le Syro SDK de Korg, qui vise la volca
-            sample premiere generation. Les emplacements au-dela de 99 et
-            les patterns de sample2 restent a confirmer sur machine reelle.
+            sample premiere generation. Les patterns de sample2 sont lus et
+            affiches, mais pas envoyables. Les emplacements au-dela de 99
+            restent a confirmer sur machine reelle. L'ecoute est mono : le
+            panoramique n'est pas simule.
 
-            Code source, tutoriel integre et 160 tests :
+            Code source, tutoriel integre et 274 tests :
             https://github.com/janintibo-art/volca-gain
